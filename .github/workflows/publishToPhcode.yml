@@ -1,0 +1,36 @@
+name: Publish extension to phcode.dev extension store
+# https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#release
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  build-tasks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to upload extension.zip as a release asset
+    steps:
+      - name: Checkout repository at the released tag
+        uses: actions/checkout@v4
+
+      - name: Build extension.zip
+        # Zip only the files Phoenix actually needs at runtime, matching the
+        # "files" array in package.json. Add LICENSE for good citizenship.
+        run: zip -r extension.zip main.js style.css package.json LICENSE
+
+      - name: Attach extension.zip to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" extension.zip \
+            --repo "${{ github.repository }}" --clobber
+
+      - name: Release details (for logs)
+        run: |
+          echo "$GITHUB_REF repo=${{ github.event.repository.full_name }}"
+
+      - name: Notify phcode.dev publish service
+        run: |
+          curl --fail-with-body \
+            "https://publish.phcode.dev/publishGithubRelease?releaseRef=${{ github.event.repository.full_name }}:$GITHUB_REF"

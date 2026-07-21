@@ -1,0 +1,226 @@
+/* FigmaToCode - UI cloned from the "Invite & Profit" reference:
+   dark zinc card, gradient hero with arc rings, round icon-chip lists,
+   bordered input + white button rows, white full-width buttons. */
+
+#f2c-toolbar-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; cursor: pointer; opacity: 0.9; transition: opacity 0.15s ease;
+    background: url("logo.png") center / 22px 22px no-repeat; border-radius: 6px;
+}
+#f2c-toolbar-btn:hover { opacity: 1; }
+
+/* ---- Zinc palette (fixed, dark) ---- */
+.f2c-panel {
+    --z950: #09090b; --z900: #18181b; --z800: #27272a; --z700: #3f3f46;
+    --z600: #52525b; --z500: #71717a; --z400: #a1a1aa; --z300: #d4d4d8;
+    --white: #ffffff; --green: #22c55e; --red: #f87171;
+
+    position: fixed; z-index: 10050; width: 384px; max-height: 82vh;
+    display: flex; flex-direction: column;
+    background: var(--z900); color: var(--z300);
+    border: 1px solid var(--z800); border-radius: 16px; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    font-size: 13px;
+    box-shadow: 0 24px 50px -12px rgba(0,0,0,0.7), 0 8px 20px -8px rgba(0,0,0,0.5);
+    animation: f2c-pop 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes f2c-pop {
+    from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ---- Header (slim nav bar) ---- */
+.f2c-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--z800);
+}
+.f2c-brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: var(--white); }
+.f2c-logo { display: inline-block; width: 22px; height: 22px; border-radius: 6px; background: url("logo.png") center / contain no-repeat; }
+.f2c-nav { display: flex; gap: 2px; background: var(--z800); border-radius: 9px; padding: 3px; }
+.f2c-nav-btn {
+    border: none; background: transparent; color: var(--z400);
+    padding: 5px 11px; border-radius: 7px; cursor: pointer; font-size: 12px; font-weight: 600;
+    transition: background 0.14s, color 0.14s;
+}
+.f2c-nav-btn:hover { color: var(--z300); }
+.f2c-nav-active { background: var(--z700); color: var(--white); }
+.f2c-nav-icon { display: flex; align-items: center; justify-content: center; padding: 5px 8px; }
+.f2c-nav-icon svg { width: 16px; height: 16px; display: block; }
+
+.f2c-body { padding: 0; overflow-y: auto; }
+.f2c-pad { padding: 18px 20px 22px; }
+
+/* ---- Hero gradient (exact clone of the reference) ---- */
+.f2c-hero {
+    height: 132px; position: relative; overflow: hidden;
+    background: #1f2a1c url("hero.jpg") center / cover no-repeat;
+}
+.f2c-hero-paid {
+    background: linear-gradient(135deg, #e0fff4 0%, #b4f0e8 22%, #7cd0e8 42%, #6ba8d0 55%, #7c8bd0 68%, #a08bd8 82%, #c4b0f0 100%);
+}
+.f2c-hero-glow {
+    position: absolute; inset: 0;
+    background:
+        radial-gradient(ellipse at 70% 40%, rgba(255,180,150,0.7) 0%, transparent 55%),
+        radial-gradient(ellipse at 30% 60%, rgba(140,100,200,0.7) 0%, transparent 55%),
+        radial-gradient(ellipse at 60% 80%, rgba(230,130,160,0.5) 0%, transparent 45%);
+}
+.f2c-hero-arc1 { position: absolute; right: -30px; top: -24px; width: 200px; height: 200px; border-radius: 50%; border: 44px solid rgba(255,255,255,0.18); }
+.f2c-hero-arc2 { position: absolute; right: 20px; top: 26px; width: 118px; height: 118px; border-radius: 50%; border: 26px solid rgba(255,255,255,0.13); }
+.f2c-hero-tile {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: 52px; height: 52px; border-radius: 15px; background: rgba(255,255,255,0.95);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 12px 28px rgba(0,0,0,0.28);
+}
+
+/* ---- Typography ---- */
+.f2c-title { font-size: 22px; font-weight: 700; color: var(--white); margin-bottom: 4px; letter-spacing: -0.01em; }
+.f2c-sub { font-size: 13px; color: var(--z400); margin-bottom: 14px; }
+.f2c-sub b, .f2c-list b, .f2c-body b { color: var(--white); font-weight: 600; }
+
+/* ---- Icon-chip list ---- */
+.f2c-list { list-style: none; padding: 0; margin: 0 0 18px; display: flex; flex-direction: column; gap: 13px; }
+.f2c-list li { display: flex; align-items: flex-start; gap: 12px; }
+.f2c-chip {
+    flex: 0 0 28px; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--z800); display: flex; align-items: center; justify-content: center; margin-top: 1px;
+}
+.f2c-chip svg { width: 14px; height: 14px; stroke: var(--z400); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.f2c-list-text { font-size: 13px; color: var(--z300); line-height: 1.45; }
+
+/* ---- Labels ---- */
+.f2c-label { font-size: 13px; color: var(--z400); margin-bottom: 8px; }
+
+/* ---- Bordered input + button row (the "invite link + Copy" pattern) ---- */
+.f2c-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.f2c-field {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+    background: var(--z800); border: 1px solid var(--z700); border-radius: 9px; padding: 9px 12px;
+}
+.f2c-field svg { flex: 0 0 14px; width: 14px; height: 14px; stroke: var(--z500); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.f2c-field input, .f2c-field code, .f2c-field .f2c-field-text {
+    flex: 1; min-width: 0; background: transparent; border: none; outline: none;
+    color: var(--z300); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: inherit;
+}
+.f2c-field code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+
+/* ---- AI-style composer (input on top, chip bar + round arrow below) ---- */
+.f2c-composer {
+    background: var(--z800); border: 1px solid var(--z700); border-radius: 16px;
+    padding: 12px 12px 10px; margin-bottom: 4px;
+}
+.f2c-composer .f2c-url {
+    width: 100%; background: transparent; border: none; outline: none;
+    color: var(--z300); font-size: 13.5px; padding: 2px 4px 12px; font-family: inherit;
+}
+.f2c-composer .f2c-url::placeholder { color: var(--z500); }
+.f2c-url-warn::placeholder { color: #f0655e !important; opacity: 0.7 !important; }
+.f2c-composer-bar { display: flex; align-items: center; gap: 6px; }
+.f2c-composer-spacer { flex: 1; }
+.f2c-chip-btn {
+    display: flex; align-items: center; gap: 6px; border: none; background: transparent;
+    color: var(--z400); padding: 6px 11px; border-radius: 9px; cursor: pointer;
+    font-size: 12.5px; font-weight: 600; transition: background 0.14s, color 0.14s;
+}
+.f2c-chip-btn:hover { color: var(--z300); background: var(--z700); }
+.f2c-chip-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.f2c-chip-active { color: var(--white); background: var(--z700); }
+.f2c-round-btn {
+    width: 36px; height: 36px; flex: 0 0 36px; border-radius: 50%; border: none;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    background: var(--z700); color: var(--z300); transition: background 0.14s, transform 0.1s;
+}
+.f2c-round-btn:hover { background: var(--z600); color: var(--white); }
+.f2c-round-btn:active { transform: translateY(1px); }
+.f2c-round-btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---- Buttons: white primary (zinc-900 text) ---- */
+.f2c-btn-white {
+    flex: 0 0 auto; background: var(--white); color: var(--z900); border: none;
+    border-radius: 9px; padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: background 0.14s, transform 0.1s; white-space: nowrap;
+}
+.f2c-btn-white:hover { background: var(--z300); }
+.f2c-btn-white:active { transform: translateY(1px); }
+.f2c-btn-full { width: 100%; padding: 11px; border-radius: 10px; }
+.f2c-btn-white[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+.f2c-btn-ghost {
+    background: var(--z800); color: var(--z300); border: none;
+    border-radius: 9px; padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.f2c-btn-ghost:hover { background: var(--z700); }
+
+.f2c-link { background: none; border: none; color: var(--z400); cursor: pointer; padding: 0; font-size: inherit; font-weight: 600; text-decoration: underline; }
+.f2c-link:hover { color: var(--white); }
+
+/* ---- Segmented seat toggle ---- */
+.f2c-seat-toggle { display: flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--z800); margin-bottom: 8px; }
+.f2c-seat-opt { flex: 1; border: none; background: transparent; color: var(--z400); padding: 8px; border-radius: 8px; cursor: pointer; font-size: 12.5px; font-weight: 600; transition: background 0.14s, color 0.14s; }
+.f2c-seat-opt:hover { color: var(--z300); }
+.f2c-seat-on { color: var(--z900); background: var(--white); }
+
+.f2c-tierline { font-size: 12px; color: var(--z500); margin-bottom: 12px; }
+
+/* ---- Suggestion / tip (plain text, no box) ---- */
+.f2c-suggest { font-size: 12px; line-height: 1.5; color: var(--z500); margin-bottom: 14px; }
+.f2c-suggest-good { color: var(--green); }
+.f2c-suggest .f2c-link { color: var(--white); }
+
+/* ---- Settings alert dot + warning line ---- */
+.f2c-nav-alert { position: relative; }
+.f2c-nav-alert::after {
+    content: ""; position: absolute; top: 1px; right: 3px; width: 7px; height: 7px;
+    border-radius: 50%; background: #f0655e; box-shadow: 0 0 0 2px var(--z800);
+}
+.f2c-warn { color: #f0655e; opacity: 0.85; font-size: 12px; font-weight: 600; margin-bottom: 9px; }
+
+/* ---- Status ---- */
+.f2c-status { padding: 9px 12px; border-radius: 9px; font-size: 12.5px; margin-bottom: 4px; margin-top: 10px; }
+.f2c-loading { background: var(--z800); color: var(--z400); }
+.f2c-ok  { background: color-mix(in srgb, var(--green) 15%, var(--z900)); color: var(--green); }
+.f2c-err { background: color-mix(in srgb, var(--red) 15%, var(--z900)); color: var(--red); }
+.f2c-callout { background: var(--z800); border: 1px solid var(--z700); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px; color: var(--z400); }
+.f2c-hint { color: var(--z400); font-size: 12px; margin: 14px 0 9px; }
+.f2c-note { color: var(--z500); font-size: 11.5px; margin: 6px 0 0; }
+
+/* ---- Empty ---- */
+.f2c-empty { text-align: center; padding: 26px 10px; color: var(--z500); }
+.f2c-empty-title { font-weight: 600; color: var(--z300); margin-bottom: 4px; }
+.f2c-empty-sub { font-size: 12px; }
+
+/* ---- Frame grid ---- */
+.f2c-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.f2c-frame {
+    display: flex; flex-direction: column; gap: 6px; padding: 8px;
+    background: var(--z800); border: 2px solid transparent; border-radius: 12px;
+    cursor: pointer; text-align: left; transition: border-color 0.14s, transform 0.14s;
+}
+.f2c-frame:hover { transform: translateY(-2px); border-color: var(--z600); }
+.f2c-selected { border-color: var(--white); }
+.f2c-frame img { width: 100%; height: 92px; object-fit: contain; border-radius: 8px; background: var(--z900); }
+.f2c-frame-ph { width: 100%; height: 92px; display: flex; align-items: center; justify-content: center; color: var(--z500); background: var(--z900); border-radius: 8px; }
+.f2c-frame-name { font-size: 11.5px; color: var(--z300); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- Seat choice cards ---- */
+.f2c-seat-choices { display: flex; flex-direction: column; gap: 11px; }
+.f2c-seat-card {
+    display: flex; flex-direction: column; gap: 4px; text-align: left;
+    background: var(--z800); border: 1px solid var(--z700); border-radius: 14px;
+    padding: 14px 16px; cursor: pointer; color: var(--z300);
+    transition: border-color 0.14s, transform 0.14s;
+}
+.f2c-seat-card:hover { border-color: var(--white); transform: translateY(-2px); }
+.f2c-seat-card b { font-size: 14.5px; color: var(--white); }
+.f2c-seat-card span:last-child { font-size: 12px; color: var(--z400); line-height: 1.4; }
+.f2c-seat-emoji { font-size: 17px; }
+
+/* ---- Settings ---- */
+.f2c-settings-footer { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--z800); }
+.f2c-scale { width: 100%; background: var(--z800); color: var(--z300); border: 1px solid var(--z700); border-radius: 9px; padding: 9px 12px; font-size: 13px; outline: none; }
+.f2c-test-out:not(:empty) { margin-top: 8px; }
+
+/* actions row */
+.f2c-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }

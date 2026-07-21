@@ -1,0 +1,23 @@
+{
+    "title": "FigmaToCode",
+    "name": "github-electrofist-figmatocode",
+    "description": "Paste a Figma link, preview the frame, and pull it into your project as HTML/CSS - right inside Phoenix Code. Includes a built-in step-by-step tutorial.",
+    "version": "1.0.0",
+    "license": "MIT",
+    "author": "Krrish (https://github.com/Electrofist)",
+    "homepage": "https://github.com/Electrofist/FigmaToCode",
+    "engines": {
+        "brackets": ">=2.0.0"
+    },
+    "categories": "design",
+    "keywords": [
+        "phcode", "extension", "figma", "design", "design-to-code",
+        "html", "css", "import", "preview", "figmatocode"
+    ],
+    "files": [
+        "main.js",
+        "style.css",
+        "logo.png",
+        "hero.jpg"
+    ]
+}
