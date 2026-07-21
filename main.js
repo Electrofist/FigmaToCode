@@ -448,12 +448,6 @@ define(function (require, exports, module) {
 
         html += '<div class="f2c-pad">';
 
-        // Always-visible plan toggle
-        html +=
-            '<div class="f2c-seat-toggle">' +
-                '<button type="button" class="f2c-seat-opt' + (seat === "free" ? " f2c-seat-on" : "") + '" data-setseat="free">Free seat</button>' +
-                '<button type="button" class="f2c-seat-opt' + (paid ? " f2c-seat-on" : "") + '" data-setseat="paid">Paid seat</button>' +
-            '</div>';
         const warn = !!ui.needTokenMsg;
         const urlVal = warn ? "" : esc(prefs.get("lastUrl") || "");
         const urlPh  = warn ? "please add a figma token" : "https://figma.com/design/…";

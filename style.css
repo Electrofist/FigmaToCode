@@ -106,14 +106,17 @@
 }
 .f2c-field code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
 
-/* ---- AI-style composer (input on top, chip bar + round arrow below) ---- */
+/* ---- Seamless composer (Claude-style: no inner fill, subtle border) ---- */
 .f2c-composer {
-    background: var(--z800); border: 1px solid var(--z700); border-radius: 16px;
-    padding: 12px 12px 10px; margin-bottom: 4px;
+    display: flex; flex-direction: column; min-height: 84px;
+    background: transparent; border: 1px solid var(--z700); border-radius: 16px;
+    padding: 14px 16px 12px; margin-bottom: 4px;
+    transition: border-color 0.14s;
 }
+.f2c-composer:focus-within { border-color: var(--z500); }
 .f2c-composer .f2c-url {
-    width: 100%; background: transparent; border: none; outline: none;
-    color: var(--z300); font-size: 13.5px; padding: 2px 4px 12px; font-family: inherit;
+    flex: 1; width: 100%; background: transparent; border: none; outline: none;
+    color: var(--z200, #e4e4e7); font-size: 14px; padding: 0 0 10px; font-family: inherit;
 }
 .f2c-composer .f2c-url::placeholder { color: var(--z500); }
 .f2c-url-warn::placeholder { color: #f0655e !important; opacity: 0.7 !important; }
