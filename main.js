@@ -216,90 +216,210 @@ define(function (require, exports, module) {
         })(root);
         return ids;
     }
-    function boxStyle(n, root) {
-        const box = n.absoluteBoundingBox;
-        if (!box) { return null; }
-        return [
-            "position:absolute",
-            "left:" + Math.round(box.x - root.x) + "px",
-            "top:" + Math.round(box.y - root.y) + "px",
-            "width:" + Math.round(box.width) + "px",
-            "height:" + Math.round(box.height) + "px"
-        ];
-    }
-    function styleForNode(n, root, isText) {
-        const decl = boxStyle(n, root);
-        if (!decl) { return null; }
-        const op = (typeof n.opacity === "number" && n.opacity < 1) ? n.opacity : null;
-        if (!isText) {
-            const bg = backgroundFromFills(n.fills, 1);
-            if (bg) { decl.push((bg.indexOf("gradient") >= 0 ? "background:" : "background-color:") + bg); }
-        }
+    function px(v) { return Math.round(v) + "px"; }
+
+    // Visual-only declarations (fills, radius, stroke, shadow, opacity). No layout.
+    function visualDecls(n) {
+        const d = [];
+        const bg = backgroundFromFills(n.fills, 1);
+        if (bg) { d.push((bg.indexOf("gradient") >= 0 ? "background:" : "background-color:") + bg); }
         const rad = radiusCss(n);
-        if (rad) { decl.push("border-radius:" + rad); }
+        if (rad) { d.push("border-radius:" + rad); }
         const stroke = firstVisible(n.strokes);
-        if (stroke && stroke.type === "SOLID") { decl.push("border:" + (n.strokeWeight || 1) + "px solid " + colorToCss(stroke.color)); }
+        if (stroke && stroke.type === "SOLID") { d.push("border:" + (n.strokeWeight || 1) + "px solid " + colorToCss(stroke.color)); }
         const sh = shadowCss(n.effects);
-        if (sh) { decl.push("box-shadow:" + sh); }
-        if (op != null) { decl.push("opacity:" + +op.toFixed(3)); }
-        if (isText) {
-            const st = n.style || {};
-            const col = backgroundFromFills(n.fills, 1);
-            if (col) { decl.push("color:" + col); }
-            if (st.fontSize)      { decl.push("font-size:" + Math.round(st.fontSize) + "px"); }
-            if (st.fontFamily)    { decl.push("font-family:'" + st.fontFamily.replace(/'/g, "") + "',sans-serif"); }
-            if (st.fontWeight)    { decl.push("font-weight:" + st.fontWeight); }
-            if (st.lineHeightPx)  { decl.push("line-height:" + Math.round(st.lineHeightPx) + "px"); }
-            if (st.letterSpacing) { decl.push("letter-spacing:" + (+st.letterSpacing).toFixed(2) + "px"); }
-            if (st.textAlignHorizontal) { decl.push("text-align:" + st.textAlignHorizontal.toLowerCase()); }
-            // Height auto + overflow visible reduces the font-metric overlap problem.
-            const idx = decl.findIndex(function (d) { return d.indexOf("height:") === 0; });
-            if (idx >= 0) { decl.splice(idx, 1); }
-            decl.push("overflow:visible", "white-space:pre-wrap");
-        }
-        return decl.join(";");
+        if (sh) { d.push("box-shadow:" + sh); }
+        if (typeof n.opacity === "number" && n.opacity < 1) { d.push("opacity:" + +n.opacity.toFixed(3)); }
+        return d;
     }
+    function textDecls(n, fonts) {
+        const st = n.style || {};
+        const d = [];
+        const col = backgroundFromFills(n.fills, 1);
+        if (col) { d.push("color:" + col); }
+        if (st.fontSize)      { d.push("font-size:" + Math.round(st.fontSize) + "px"); }
+        if (st.fontFamily)    { fonts[st.fontFamily] = true; d.push("font-family:'" + st.fontFamily.replace(/'/g, "") + "',sans-serif"); }
+        if (st.fontWeight)    { d.push("font-weight:" + st.fontWeight); }
+        if (st.lineHeightPx)  { d.push("line-height:" + Math.round(st.lineHeightPx) + "px"); }
+        if (st.letterSpacing) { d.push("letter-spacing:" + (+st.letterSpacing).toFixed(2) + "px"); }
+        if (st.textAlignHorizontal) { d.push("text-align:" + st.textAlignHorizontal.toLowerCase()); }
+        d.push("white-space:pre-wrap");
+        return d;
+    }
+    // CSS for one style-override run (only the keys Figma actually overrode).
+    function runStyleCss(ov, fonts) {
+        const d = [];
+        if (ov.fontSize)   { d.push("font-size:" + Math.round(ov.fontSize) + "px"); }
+        if (ov.fontFamily) { fonts[ov.fontFamily] = true; d.push("font-family:'" + ov.fontFamily.replace(/'/g, "") + "',sans-serif"); }
+        if (ov.fontWeight) { d.push("font-weight:" + ov.fontWeight); }
+        if (ov.letterSpacing) { d.push("letter-spacing:" + (+ov.letterSpacing).toFixed(2) + "px"); }
+        if (ov.lineHeightPx)  { d.push("line-height:" + Math.round(ov.lineHeightPx) + "px"); }
+        if (ov.fills) { const c = backgroundFromFills(ov.fills, 1); if (c) { d.push("color:" + c); } }
+        if (ov.textCase === "UPPER") { d.push("text-transform:uppercase"); }
+        else if (ov.textCase === "LOWER") { d.push("text-transform:lowercase"); }
+        if (ov.textDecoration === "UNDERLINE") { d.push("text-decoration:underline"); }
+        else if (ov.textDecoration === "STRIKETHROUGH") { d.push("text-decoration:line-through"); }
+        return d;
+    }
+    // Inner HTML for a text node: split into <span> runs when it has mixed styles.
+    function textInner(n, fonts) {
+        const chars = n.characters || "";
+        const ov = n.characterStyleOverrides;
+        const table = n.styleOverrideTable;
+        if (!ov || !ov.length || !table || !Object.keys(table).length) { return esc(chars); }
+        const arr = Array.from(chars); // codepoint-safe
+        let html = "", i = 0;
+        while (i < arr.length) {
+            const id = ov[i] || 0;
+            let s = "";
+            while (i < arr.length && (ov[i] || 0) === id) { s += arr[i]; i++; }
+            const style = id && table[id] ? runStyleCss(table[id], fonts).join(";") : "";
+            html += style ? '<span style="' + style + '">' + esc(s) + '</span>' : esc(s);
+        }
+        return html;
+    }
+    const ALIGN_PRIMARY = { MIN: "flex-start", CENTER: "center", MAX: "flex-end", SPACE_BETWEEN: "space-between" };
+    const ALIGN_COUNTER = { MIN: "flex-start", CENTER: "center", MAX: "flex-end", BASELINE: "baseline" };
+    function isFlex(n) { return n && n.layoutMode && n.layoutMode !== "NONE"; }
+    // Auto-layout -> flexbox declarations.
+    function flexDecls(n) {
+        const d = ["display:flex", "position:relative"];
+        d.push("flex-direction:" + (n.layoutMode === "HORIZONTAL" ? "row" : "column"));
+        const spaceBetween = n.primaryAxisAlignItems === "SPACE_BETWEEN";
+        if (spaceBetween) { d.push("justify-content:space-between"); }
+        else if (n.primaryAxisAlignItems) { d.push("justify-content:" + (ALIGN_PRIMARY[n.primaryAxisAlignItems] || "flex-start")); }
+        if (n.counterAxisAlignItems) { d.push("align-items:" + (ALIGN_COUNTER[n.counterAxisAlignItems] || "flex-start")); }
+        if (n.itemSpacing && !spaceBetween) { d.push("gap:" + Math.round(n.itemSpacing) + "px"); }
+        const pt = n.paddingTop || 0, pr = n.paddingRight || 0, pb = n.paddingBottom || 0, pl = n.paddingLeft || 0;
+        if (pt || pr || pb || pl) { d.push("padding:" + pt + "px " + pr + "px " + pb + "px " + pl + "px"); }
+        return d;
+    }
+    // One axis (width or height) of a flex child, driven by Figma's real sizing:
+    //   HUG   -> auto (fit content)   FILL -> grow on main axis / stretch on cross   FIXED -> px
+    // `size` may be undefined on older/vector nodes; treat that as FIXED (snapshot px).
+    function axisDecls(prop, size, val, isMain, forceAuto) {
+        const d = [];
+        if (forceAuto) { return d; }               // caller wants this axis to stay auto (e.g. text height)
+        if (size === "FILL") {
+            if (isMain) { d.push("flex:1 1 0"); }
+            else { d.push("align-self:stretch"); }
+        } else if (size === "HUG") {
+            // fit-content. Figma never shrinks a HUG item below its content, so on the
+            // parent's main axis pin flex-shrink:0 (otherwise flex squeezes it and text wraps).
+            if (isMain) { d.push("flex-shrink:0"); }
+        } else if (val != null) {                   // FIXED or unknown -> explicit px
+            d.push(prop + ":" + px(val));
+            if (isMain) { d.push("flex-shrink:0"); } // don't let a fixed main size collapse
+        }
+        return d;
+    }
+
+    // Figma constraints -> CSS anchoring, so absolute children reflow with the
+    // parent exactly as they do in Figma (LEFT stays, RIGHT sticks right,
+    // LEFT_RIGHT stretches, CENTER stays centered, SCALE scales by %).
+    function constraintDecls(n, pbox, opts) {
+        opts = opts || {};
+        const box = n.absoluteBoundingBox;
+        const c = n.constraints || {};
+        const pw = pbox.width || 1, ph = pbox.height || 1;
+        const left = Math.round(box.x - pbox.x), top = Math.round(box.y - pbox.y);
+        const right = Math.round(pw - (box.x - pbox.x) - box.width);
+        const bottom = Math.round(ph - (box.y - pbox.y) - box.height);
+        const noW = opts.autoW || n.layoutSizingHorizontal === "HUG";
+        const noH = opts.autoH || n.layoutSizingVertical === "HUG";
+        const d = [], tf = [];
+        // Horizontal.
+        if (c.horizontal === "RIGHT") { d.push("right:" + right + "px"); if (!noW) { d.push("width:" + Math.round(box.width) + "px"); } }
+        else if (c.horizontal === "LEFT_RIGHT") { d.push("left:" + left + "px", "right:" + right + "px"); }
+        else if (c.horizontal === "CENTER") { d.push("left:calc(50% + " + Math.round(left + box.width / 2 - pw / 2) + "px)"); tf.push("translateX(-50%)"); if (!noW) { d.push("width:" + Math.round(box.width) + "px"); } }
+        else if (c.horizontal === "SCALE") { d.push("left:" + (left / pw * 100).toFixed(3) + "%"); if (!noW) { d.push("width:" + (box.width / pw * 100).toFixed(3) + "%"); } }
+        else { d.push("left:" + left + "px"); if (!noW) { d.push("width:" + Math.round(box.width) + "px"); } }
+        // Vertical.
+        if (c.vertical === "BOTTOM") { d.push("bottom:" + bottom + "px"); if (!noH) { d.push("height:" + Math.round(box.height) + "px"); } }
+        else if (c.vertical === "TOP_BOTTOM") { d.push("top:" + top + "px", "bottom:" + bottom + "px"); }
+        else if (c.vertical === "CENTER") { d.push("top:calc(50% + " + Math.round(top + box.height / 2 - ph / 2) + "px)"); tf.push("translateY(-50%)"); if (!noH) { d.push("height:" + Math.round(box.height) + "px"); } }
+        else if (c.vertical === "SCALE") { d.push("top:" + (top / ph * 100).toFixed(3) + "%"); if (!noH) { d.push("height:" + (box.height / ph * 100).toFixed(3) + "%"); } }
+        else { d.push("top:" + top + "px"); if (!noH) { d.push("height:" + Math.round(box.height) + "px"); } }
+        if (tf.length) { d.push("transform:" + tf.join(" ")); }
+        return d;
+    }
+
+    // Size + position for a node given its parent context.
+    function layoutDecls(n, parent, opts) {
+        opts = opts || {};
+        const d = [];
+        const box = n.absoluteBoundingBox;
+        const parentFlex = isFlex(parent);
+        const abs = n.layoutPositioning === "ABSOLUTE";
+        if (parentFlex && !abs) {
+            const mainIsWidth = parent.layoutMode === "HORIZONTAL";
+            d.push.apply(d, axisDecls("width",  n.layoutSizingHorizontal, box && box.width,  mainIsWidth,  opts.autoW));
+            d.push.apply(d, axisDecls("height", n.layoutSizingVertical,   box && box.height, !mainIsWidth, opts.autoH));
+        } else if (box) {
+            // Absolute within the parent (non-auto-layout parent, or an absolutely-positioned child).
+            const pbox = (parent && parent.absoluteBoundingBox) || box;
+            d.push("position:absolute");
+            d.push.apply(d, constraintDecls(n, pbox, opts));
+        }
+        return d;
+    }
+
+    // Recursive: build nested HTML for a node.
+    function renderNode(n, parent, assetMap, fonts, ctr) {
+        if (!n || n.visible === false || ctr.c >= MAX_ELEMENTS) { return ""; }
+        ctr.c++;
+
+        // Assets: export as a flat image, never recurse.
+        if (isAsset(n)) {
+            const url = assetMap[n.id];
+            const d = layoutDecls(n, parent).concat("object-fit:contain");
+            if (url) { return '<img alt="' + esc(n.name) + '" src="' + esc(url) + '" style="' + d.join(";") + '" />'; }
+            return '<div data-name="' + esc(n.name) + '" style="' + d.concat(visualDecls(n)).join(";") + '"></div>';
+        }
+
+        // Text.
+        if (n.type === "TEXT") {
+            const ar = (n.style && n.style.textAutoResize) || "NONE";
+            // Width auto only when Figma hugs both axes; height always auto so text can wrap freely.
+            const hug = ar === "WIDTH_AND_HEIGHT";
+            const d = layoutDecls(n, parent, { autoW: hug, autoH: true }).concat(textDecls(n, fonts));
+            return '<div data-name="' + esc(n.name) + '" style="' + d.join(";") + '">' + textInner(n, fonts) + '</div>';
+        }
+
+        // Container. Height/width now come from the sizing model (layoutSizing*), so no px heuristic.
+        const flex = isFlex(n);
+        let d = layoutDecls(n, parent, {});
+        if (flex) { d = d.concat(flexDecls(n)); }
+        else { d.push("position:" + (n.layoutPositioning === "ABSOLUTE" || (parent && !isFlex(parent)) ? "absolute" : "relative")); }
+        d.push(n.clipsContent ? "overflow:hidden" : "overflow:visible");
+        d = d.concat(visualDecls(n));
+        let inner = "";
+        (n.children || []).forEach(function (c) { inner += renderNode(c, n, assetMap, fonts, ctr); });
+        return '<div data-name="' + esc(n.name) + '" style="' + d.join(";") + '">' + inner + '</div>';
+    }
+
     function generateFromNode(root, assetMap) {
         const rootBox = root.absoluteBoundingBox;
         if (!rootBox) { throw new Error("This node has no geometry to convert."); }
-        const els = [];
         const fonts = {};
-        let count = 0;
-        (function walk(n) {
-            if (count >= MAX_ELEMENTS || !n || n.visible === false) { return; }
-            if (n !== root && isAsset(n)) {
-                const url = assetMap[n.id];
-                const bs = boxStyle(n, rootBox);
-                if (url && bs) {
-                    count++;
-                    els.push('<img alt="' + esc(n.name) + '" src="' + esc(url) + '" style="' + bs.join(";") +
-                        ';object-fit:contain" />');
-                } else if (bs) {
-                    // export failed -> at least draw the box
-                    count++;
-                    els.push('<div data-name="' + esc(n.name) + '" style="' + bs.join(";") + '"></div>');
-                }
-                return; // never recurse into an asset
-            }
-            const isText = n.type === "TEXT";
-            const style = styleForNode(n, rootBox, isText);
-            if (style) {
-                count++;
-                if (isText) {
-                    if (n.style && n.style.fontFamily) { fonts[n.style.fontFamily] = true; }
-                    els.push('<div data-name="' + esc(n.name) + '" style="' + style + '">' + esc(n.characters || "") + '</div>');
-                } else {
-                    els.push('<div data-name="' + esc(n.name) + '" style="' + style + '"></div>');
-                }
-            }
-            (n.children || []).forEach(walk);
-        })(root);
+        const ctr = { c: 0 };
+        const flex = isFlex(root);
 
-        const w = Math.round(rootBox.width);
-        const h = Math.round(rootBox.height);
-        const rootBg = backgroundFromFills(root.fills, 1) || "#ffffff";
+        // Root declarations.
+        // Native design width, centered. No max-width cap: capping a fixed-width
+        // desktop artboard clips LEFT-anchored content. Constraints (constraintDecls)
+        // still make it reflow correctly if the page is later made responsive.
+        const rootDecls = flex ? flexDecls(root) : ["position:relative"];
+        rootDecls.push("width:" + px(rootBox.width), "margin:0 auto");
+        if (!flex) { rootDecls.push("height:" + px(rootBox.height)); }
+        rootDecls.push(root.clipsContent === false ? "overflow:visible" : "overflow:hidden");
+        rootDecls.push.apply(rootDecls, visualDecls(root));
+        const rootBg = backgroundFromFills(root.fills, 1);
+        if (!rootBg) { rootDecls.push("background:#ffffff"); }
 
-        // Google Fonts link for whatever families we saw (harmless if some 404).
+        let inner = "";
+        (root.children || []).forEach(function (c) { inner += renderNode(c, root, assetMap, fonts, ctr); });
+
         const fams = Object.keys(fonts);
         let fontLink = "";
         if (fams.length) {
@@ -318,15 +438,14 @@ define(function (require, exports, module) {
             "  <style>",
             "    * { margin: 0; padding: 0; box-sizing: border-box; }",
             "    body { display: flex; justify-content: center; background: #f4f4f5; padding: 24px; }",
-            "    .figma-root { position: relative; width: " + w + "px; height: " + h + "px; overflow: hidden; background: " + rootBg + "; }",
-            "    .figma-root img { display: block; }",
+            "    .figma-root img { display: block; max-width: 100%; }",
             "  </style>",
             "</head>",
             "<body>",
             '  <!-- Generated from Figma by FigmaToCode (free/REST path). Frame: ' + esc(root.name || "") + '.',
-            "       Icons/images are Figma export URLs that expire ~7 days after generation. -->",
-            '  <div class="figma-root">',
-            "    " + els.join("\n    "),
+            "       Auto-layout frames become flexbox; icons/images are Figma export URLs that expire ~7 days. -->",
+            '  <div class="figma-root" style="' + rootDecls.join(";") + '">',
+            "    " + inner,
             "  </div>",
             "</body>",
             "</html>",
