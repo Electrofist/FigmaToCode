@@ -451,6 +451,8 @@ define(function (require, exports, module) {
         const warn = !!ui.needTokenMsg;
         const urlVal = warn ? "" : esc(prefs.get("lastUrl") || "");
         const urlPh  = warn ? "please add a figma token" : "https://figma.com/design/…";
+        html += '<div class="f2c-title" style="font-size:16px;">Paste a Figma frame link</div>';
+        html += '<div class="f2c-sub">In Figma: right-click a frame, then <b>Copy link to selection</b>.</div>';
         html +=
             '<div class="f2c-composer">' +
                 '<input type="text" class="f2c-url' + (warn ? " f2c-url-warn" : "") + '" placeholder="' + esc(urlPh) + '" value="' + urlVal + '" />' +
