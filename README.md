@@ -4,6 +4,16 @@ Paste a Figma link, preview the frame, and pull it into your project as code, al
 
 > A designer-friendly bridge from Figma to code, right where you already work.
 
+<p align="center">
+  <img src="screenshots/panel.png" alt="FigmaToCode panel - Free and Paid tutorials" width="100%" />
+</p>
+
+Paste a link, pick a frame, and get the design in your project as code, with every icon exported straight from the source:
+
+<p align="center">
+  <img src="screenshots/output.png" alt="A Figma pricing page rendered as code in Phoenix Code" width="100%" />
+</p>
+
 ---
 
 ## Two ways to generate, pick your plan
