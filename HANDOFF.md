@@ -192,6 +192,17 @@ Then drive via DOM: `#f2c-toolbar-btn` click, set prefs, `.f2c-nav-btn[data-view
   editor/network.
 - `test/generator.test.js` — 14 behaviour tests (image fills, flexbox, sizing,
   text, root).
+- `test/tokens.test.js` — 19 tests for Figma color-style -> CSS custom property
+  emission (naming, reuse, stroke styles, collisions, no-styles no-regression,
+  no-dangling-var invariant).
+- `test/errors.test.js` — 17 tests: `figmaGet` exact friendly message per status
+  (401/403/404/429/5xx/offline/no-token/ok) + `collectFrames` crafted/hostile
+  responses (null/empty/wrong-types/MAX_FRAMES cap/hostile names, no throw).
+- `test/perf.test.js` — large/pathological ceilings (150 assets, ~5.5k-node tree,
+  depth-1000 chain) with timing budgets + cap assertions.
+- `test/snapshot.test.js` — golden-snapshot regression: a fixed reference frame's
+  generated HTML is diffed against `test/__snapshots__/reference.html`. Update
+  intentionally with `UPDATE_SNAPSHOT=1 node test/snapshot.test.js`.
 - `test/stress.test.js` — **seeded fuzzer** (12 seeds × 60 trees = 720/run,
   ~9,400 assertions) generating random Figma trees + poison-injection into names/
   text/font/numeric/enum fields; asserts: never throws, no `undefined`/`NaN`/
@@ -203,8 +214,15 @@ Then drive via DOM: `#f2c-toolbar-btn` click, set prefs, `.f2c-nav-btn[data-view
 - `scripts/check-release-manifest.js` — fails if any `package.json` "files" entry
   is missing from the publish zip or disk, or version isn't semver. **This guard
   would have caught the missing-logo bug.**
-- Run all: `npm run check` (syntax + generator + stress + assets + manifest).
-  `.github/workflows/ci.yml` runs them on push/PR (only active once pushed).
+- Run all: `npm run check` (syntax + generator + tokens + errors + perf + snapshot
+  + assets + stress + manifest; ~9,495 assertions). `.github/workflows/ci.yml`
+  runs them on **every push (any branch) and PR**, so feature branches get CI
+  signal before merge.
+- **Known test gaps (deliberate, low-ROI for a no-deps extension):** no full DOM
+  panel-integration suite (needs jsdom/deps; panel strings are already `esc()`'d
+  and the render code is simple) and no pixel-diff visual regression (the golden
+  snapshot covers silent output changes instead). Add these only if the project
+  gains a build pipeline.
 
 ## 8. Security posture
 Audited against the standard injection checklist. This is a Phoenix (Brackets)
@@ -239,21 +257,22 @@ web_accessible_resources, chrome.runtime/sender.id, remote code) are N/A.
   `PreferencesManager` without it touching the transcript.
 
 ## 10. Current state + pending (read carefully)
-- **`main`** = published **v1.0.3** (HEAD `98e1c4b`), live in the store.
-- **`paid-path-automation`** = CURRENT work branch, **6 commits ahead of main**,
-  package.json still says **1.0.3**, **NOT pushed**. `npm run check` is fully
-  green. This is the v1.0.4 payload (§4).
-- **`token-accuracy`** = historical branch; older copy of an earlier HANDOFF.
-  Treat as stale (this file supersedes it). Do new work off `main`.
-- **To ship v1.0.4:** bump package.json → `1.0.4`, merge `paid-path-automation`
-  → `main`, push (ask first), then cut a GitHub release with a NEW tag
-  (needs user's login) → the workflow publishes to the store.
+- **`main`** = published **v1.0.4** (tag `V.06`), live in the store. Adds the
+  token-based paid path, security hardening, UI fixes, and the test suite (§4).
+- **`design-tokens`** = CURRENT work branch off `main`. Adds design tokens
+  (color styles -> CSS custom properties, §4) + the errors/perf/snapshot tests +
+  broadened CI. `npm run check` fully green. This is the **v1.0.5 / tag V.07**
+  payload. Bump package.json 1.0.4 -> 1.0.5, merge to `main`, push, cut release.
+- **`paid-path-automation`** = merged into `main` (v1.0.4); safe to delete.
+- **`token-accuracy`** = historical branch; older HANDOFF. Stale; this supersedes.
 
 ### Pending user-only chores (auth-gated)
-- Push `paid-path-automation` + cut the **v1.0.4** release when ready.
+- **ROTATE THE FIGMA TOKEN — NOT DONE.** Confirmed this session: the token stored
+  in prefs (`figd_nHnPZ...`) is the exact one that leaked into a transcript, and
+  it still returns `200/active` on `/me`. Create a new token (Figma → Settings →
+  Security), **revoke this one**, and re-save via the panel Settings gear.
+- Cut the **v1.0.5 / V.07** release once merged/pushed.
 - Optional: delete the failed **V.02** GitHub release.
-- Consider rotating the Figma test token once more (it appeared in a transcript
-  earlier this session); re-add via the Settings gear.
 
 ## 11. Gotchas learned
 - Store zip must include EVERY runtime asset (the logo/hero omission). The
@@ -272,16 +291,27 @@ web_accessible_resources, chrome.runtime/sender.id, remote code) are N/A.
 - Pricing file `itAEtcKQNpHvZeKfeWnyfV`, node `23:20941` — earlier accuracy proof
   (token access may vary).
 
-## 13. Roadmap / next steps
-- **Ship v1.0.4** (§10).
-- **Paid path**: consider stronger visual grounding (e.g. download the rendered
-  PNG locally and have the panel's Claude `Read` it) now that the composer is
-  known text-only.
-- **§8.5 polish (lower priority):** SVG export for vectors (crisper/smaller vs
-  PNG), rotation via `relativeTransform`, masks, layer/background blur, multiple
-  shadows, blend modes.
-- **§8.6:** dedupe repeated inline styles into CSS classes; sanitized layer names
-  as class names (cleaner output).
+## 13. Roadmap / next steps (ranked by leverage)
+1. **Responsive / breakpoints** — biggest gap for the "pixel-perfect" claim. The
+   generator renders at native width with no reflow. If Figma has width variants
+   of the same frame, detect them and emit media queries. Highest fidelity win.
+2. **Design tokens / variables** — DONE for color styles (v1.0.5). Extend to Figma
+   **Variables** (spacing/typography) when there's a way to resolve them (the
+   Variables REST API is Enterprise-only; today it 403s).
+3. **Framework export target (React component)** — biggest differentiation: turns
+   "generates a static file" into "something a dev drops into a codebase." Bigger
+   lift; likely a paid-path/LLM feature.
+4. **Batch / multi-frame export** — smaller lift, clear utility (convert a whole
+   page of frames in one pass).
+- **Paid path**: stronger visual grounding (download the rendered PNG locally and
+  have the panel's Claude `Read` it) now that the composer is known text-only.
+- **§8.5 polish (lower priority):** SVG export for vectors, rotation via
+  `relativeTransform`, masks, layer/background blur, multiple shadows, blend modes.
+- **§8.6 (cleaner output):** dedupe repeated inline styles into CSS classes;
+  sanitized layer names as class names.
+  - **HARD RULE when building §8.6:** class names come from untrusted Figma layer
+    names, so sanitize AND add a fuzz invariant BEFORE ship (same class as the
+    font-family XSS). Never let generated class/selector names land un-fuzzed.
 - Ceiling reality: REST output stays mechanical (div soup, no semantics). Semantic
   / framework-aware / human-quality code is the LLM's job (the paid path).
 

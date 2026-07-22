@@ -1,10 +1,9 @@
 name: CI
 
-# Guards every push / PR: syntax, generator behaviour, and release-packaging
-# integrity (so a missing asset or bad version can't reach a release).
+# Guards every push (ANY branch, so feature branches get CI signal before merge)
+# and every PR: syntax, generator behaviour, and release-packaging integrity.
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -25,6 +24,15 @@ jobs:
 
       - name: Design-token tests
         run: node test/tokens.test.js
+
+      - name: Error-path + crafted-response tests
+        run: node test/errors.test.js
+
+      - name: Performance / pathological ceilings
+        run: node test/perf.test.js
+
+      - name: Golden-snapshot regression
+        run: node test/snapshot.test.js
 
       - name: Stress + fuzz suite
         run: node test/stress.test.js
