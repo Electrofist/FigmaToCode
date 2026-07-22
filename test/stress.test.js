@@ -68,10 +68,10 @@ function randFills(r, refs) {
 function randStyle(r) {
     return { fontSize: pick(r, [10, 12, 13, 16, 18, 24, 48, undefined]),
         fontFamily: pick(r, ["Inter", "Roboto", "SF Pro", "O'Neil \"Bold\"", POISON, "x\"><script>", undefined]),
-        fontWeight: pick(r, [400, 500, 600, 700, undefined]),
+        fontWeight: pick(r, [400, 500, 600, 700, POISON, "700\"><b", undefined]),
         lineHeightPx: pick(r, [16, 20, 24, undefined]),
         letterSpacing: pick(r, [0, 0.5, -0.2, undefined]),
-        textAlignHorizontal: pick(r, ["LEFT", "CENTER", "RIGHT", undefined]),
+        textAlignHorizontal: pick(r, ["LEFT", "CENTER", "RIGHT", POISON, "left\"><script>", undefined]),
         textAutoResize: pick(r, ["NONE", "HEIGHT", "WIDTH_AND_HEIGHT", undefined]) };
 }
 function textOverrides(r, chars) {
@@ -103,9 +103,12 @@ function makeNode(r, refs, depth) {
     };
     if (hasBox) { n.absoluteBoundingBox = randBox(r, w, h); }
     n.fills = randFills(r, refs);
-    if (chance(r, 0.5)) { n.strokes = [solid(r)]; n.strokeWeight = int(r, 1, 4); }
+    if (chance(r, 0.5)) { n.strokes = [solid(r)]; n.strokeWeight = chance(r, 0.1) ? POISON : int(r, 1, 4); }
     if (chance(r, 0.3)) { n.cornerRadius = int(r, 0, 24); }
-    if (chance(r, 0.1)) { n.rectangleCornerRadii = [int(r, 0, 20), int(r, 0, 20), int(r, 0, 20), int(r, 0, 20)]; }
+    if (chance(r, 0.1)) { n.rectangleCornerRadii = chance(r, 0.3) ? [POISON, 4, 4, 4] : [int(r, 0, 20), int(r, 0, 20), int(r, 0, 20), int(r, 0, 20)]; }
+    // poison numeric layout fields too (crafted-file defense-in-depth)
+    if (chance(r, 0.06)) { n.paddingTop = POISON; }
+    if (chance(r, 0.06)) { n.itemSpacing = POISON; }
     if (chance(r, 0.4)) { n.opacity = r(); }
     n.effects = randEffects(r);
     n.constraints = { horizontal: pick(r, CONSTR), vertical: pick(r, CONSTR) };
@@ -160,10 +163,21 @@ function checkInvariants(label, root, refs) {
     ok(label + " no ':null' css value", html.indexOf(":null") === -1 && html.indexOf("(null") === -1);
     ok(label + " no unescaped <script", html.indexOf("<script") === -1);
     ok(label + " no relative raster url()", !/url\((['"]?)(?!data:|https?:)[^)]*\.(?:png|jpe?g|gif|webp)\1\)/.test(html));
-    // escaping: every poisoned span must be entity-escaped (no raw < > ")
-    let m, reg = new RegExp(ZS + "([\\s\\S]*?)" + ZE, "g"), escOk = true;
-    while ((m = reg.exec(html))) { if (/[<>"]/.test(m[1])) { escOk = false; break; } }
-    ok(label + " poison spans fully escaped (no attr/tag breakout)", escOk);
+    // style-attribute injection backstop: no < or > may appear inside any style="" value
+    var sm, sreg = / style="([^"]*)"/g, styleClean = true;
+    while ((sm = sreg.exec(html))) { if (/[<>]/.test(sm[1])) { styleClean = false; break; } }
+    ok(label + " no < or > inside any style attr (no CSS-injection breakout)", styleClean);
+    // Escaping/injection: after removing every legitimate tag the generator can
+    // emit, NO stray "<" may remain. Any injected markup (e.g. <script>, <img
+    // onerror>) leaves a raw "<"; escaped content only has "&lt;". This is robust
+    // to multi-style text runs (which legitimately insert <span> wrappers).
+    const stripped = html
+        .replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/<!doctype[^>]*>/gi, "")
+        .replace(/<\/?(?:div|img|span|link|meta|title|style|body|html|head)\b[^>]*>/gi, "");
+    ok(label + " no stray '<' after removing known tags (no HTML injection)", stripped.indexOf("<") === -1,
+        process.env.DEBUG_LEAK ? JSON.stringify(stripped.slice(stripped.indexOf("<") - 40, stripped.indexOf("<") + 40)) : undefined);
+    ok(label + " no javascript: URI", !/javascript:/i.test(html));
 
     // paid-path prompt on the same tree
     let prompt;

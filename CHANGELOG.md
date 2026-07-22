@@ -20,11 +20,20 @@ All notable changes to FigmaToCode. Versions map to phcode store releases.
   offline, server errors).
 - Warn when the 120-icon export cap is hit.
 
+### Security
+- **Style-attribute injection hardened (found by fuzzing).** A Figma font name
+  containing `"`/`<` could break out of the generated inline `style` and inject
+  markup into the output opened in Live Preview (XSS). Fixed at two levels:
+  font names are sanitized to a safe charset, AND every assembled `style=""`
+  value now passes through `styleAttr()` which strips `"`/`<`/`>` - so no
+  untrusted Figma field (font-weight, text-align, padding, stroke, radii, etc.)
+  can break out of the attribute, regardless of a crafted file. The fuzzer
+  injects poison into all of these and asserts no HTML injection.
+- Security audit (Phoenix extension): no `eval`/`innerHTML`-with-untrusted/
+  `postMessage`/prototype-merge sinks; all UI HTML is `esc()`-escaped; zero npm
+  dependencies; token stored locally in Phoenix prefs only, never uploaded.
+
 ### Fixed
-- **Security: font-family injection.** A Figma font name containing a `"`/`<`
-  could break out of the generated inline `style` attribute (`x"><script>...`),
-  injecting markup into the output opened in Live Preview. Font names are now
-  sanitized to a safe character set. Found by the fuzz suite.
 - Panel re-mounts if it was ever detached from the DOM (toolbar button could
   otherwise silently no-op).
 

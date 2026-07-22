@@ -289,6 +289,12 @@ define(function (require, exports, module) {
         return ["background-image:url('" + esc(url) + "')"].concat(scaleModeDecls(imgFill.scaleMode));
     }
     function px(v) { return Math.round(v) + "px"; }
+    // Assemble an inline style="" value. Untrusted Figma values (font names, and
+    // in theory any numeric/enum field on a crafted file) flow into these decls;
+    // no legitimate CSS value here contains " < or >, and those are the only chars
+    // that can break out of the quoted attribute - strip them as a hard backstop
+    // against style-attribute injection (defense in depth beyond per-field checks).
+    function styleAttr(decls) { return decls.join(";").replace(/["<>]/g, ""); }
 
     // Visual-only declarations (fills, radius, stroke, shadow, opacity). No layout.
     function visualDecls(n, imageFillMap) {
@@ -357,7 +363,7 @@ define(function (require, exports, module) {
             const id = ov[i] || 0;
             let s = "";
             while (i < arr.length && (ov[i] || 0) === id) { s += arr[i]; i++; }
-            const style = id && table[id] ? runStyleCss(table[id], fonts).join(";") : "";
+            const style = id && table[id] ? styleAttr(runStyleCss(table[id], fonts)) : "";
             html += style ? '<span style="' + style + '">' + esc(s) + '</span>' : esc(s);
         }
         return html;
@@ -457,8 +463,8 @@ define(function (require, exports, module) {
         if (isAsset(n)) {
             const url = assetMap[n.id];
             const d = layoutDecls(n, parent).concat("object-fit:contain");
-            if (url) { return '<img alt="' + esc(n.name) + '" src="' + esc(url) + '" style="' + d.join(";") + '" />'; }
-            return '<div data-name="' + esc(n.name) + '" style="' + d.concat(visualDecls(n, imageFillMap)).join(";") + '"></div>';
+            if (url) { return '<img alt="' + esc(n.name) + '" src="' + esc(url) + '" style="' + styleAttr(d) + '" />'; }
+            return '<div data-name="' + esc(n.name) + '" style="' + styleAttr(d.concat(visualDecls(n, imageFillMap))) + '"></div>';
         }
 
         // Text.
@@ -467,7 +473,7 @@ define(function (require, exports, module) {
             // Width auto only when Figma hugs both axes; height always auto so text can wrap freely.
             const hug = ar === "WIDTH_AND_HEIGHT";
             const d = layoutDecls(n, parent, { autoW: hug, autoH: true }).concat(textDecls(n, fonts));
-            return '<div data-name="' + esc(n.name) + '" style="' + d.join(";") + '">' + textInner(n, fonts) + '</div>';
+            return '<div data-name="' + esc(n.name) + '" style="' + styleAttr(d) + '">' + textInner(n, fonts) + '</div>';
         }
 
         // Container. Height/width now come from the sizing model (layoutSizing*), so no px heuristic.
@@ -481,7 +487,7 @@ define(function (require, exports, module) {
         d = d.concat(visualDecls(n, imageFillMap));
         let inner = "";
         (n.children || []).forEach(function (c) { inner += renderNode(c, n, assetMap, fonts, ctr, imageFillMap); });
-        return '<div data-name="' + esc(n.name) + '" style="' + d.join(";") + '">' + inner + '</div>';
+        return '<div data-name="' + esc(n.name) + '" style="' + styleAttr(d) + '">' + inner + '</div>';
     }
 
     function generateFromNode(root, assetMap, imageFillMap) {
@@ -532,7 +538,7 @@ define(function (require, exports, module) {
             "<body>",
             '  <!-- Generated from Figma by FigmaToCode (free/REST path). Frame: ' + esc(root.name || "") + '.',
             "       Auto-layout frames become flexbox; icons/images are Figma export URLs that expire ~7 days. -->",
-            '  <div class="figma-root" style="' + rootDecls.join(";") + '">',
+            '  <div class="figma-root" style="' + styleAttr(rootDecls) + '">',
             "    " + inner,
             "  </div>",
             "</body>",
