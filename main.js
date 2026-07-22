@@ -146,9 +146,13 @@ define(function (require, exports, module) {
                 return res.json();
             });
     }
-    function fetchImages(key, ids, scale) {
+    function fetchImages(key, ids, scale, format) {
         if (!ids.length) { return Promise.resolve({}); }
-        const q = "?ids=" + encodeURIComponent(ids.join(",")) + "&format=png&scale=" + (scale || getScale());
+        format = format || "png";
+        // SVG for vector/icon assets = crisp, resolution-independent, exact. PNG for
+        // rendered previews. SVG ignores scale.
+        const q = "?ids=" + encodeURIComponent(ids.join(",")) + "&format=" + format +
+            (format === "png" ? "&scale=" + (scale || getScale()) : "");
         return figmaGet("/images/" + key + q).then(function (data) { return (data && data.images) || {}; });
     }
     // Raw source images behind every IMAGE fill in the file, keyed by imageRef. One
@@ -233,18 +237,41 @@ define(function (require, exports, module) {
     // NOTE: raster IMAGE fills are NOT flattened here - they are embedded as a CSS
     // background on the node itself (see imageFillDecls) so overlaid children survive
     // and scaleMode maps to background-size. Only true vectors/icons flatten to <img>.
+    const VECTOR_TYPES = ["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "REGULAR_POLYGON"];
     function isAsset(n) {
         if (!n) { return false; }
         if (/(^|[^a-z])(icon|logo|glyph)([^a-z]|$)/i.test(n.name || "")) { return true; }
-        const vt = ["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "REGULAR_POLYGON"];
-        if (vt.indexOf(n.type) !== -1) { return true; }
+        if (VECTOR_TYPES.indexOf(n.type) !== -1) { return true; }
         return false;
     }
+    // A small container whose whole subtree is pure vector art (no text, no raster
+    // image) is an ICON/LOGO - export it as ONE image, not fragmented into its
+    // individual paths. This is the big accuracy fix: a single icon can be dozens
+    // or hundreds of VECTOR children (one was 156 paths); exporting each separately
+    // shreds the icon AND blows the MAX_ASSETS budget, leaving empty bordered boxes.
+    function isPureGraphic(n) {
+        if (!n || !n.children || !n.children.length) { return false; }
+        const box = n.absoluteBoundingBox;
+        if (box && (box.width > 512 || box.height > 512)) { return false; } // too big to be an icon; likely a real section
+        let ok = true, hasVector = false, count = 0;
+        (function scan(m) {
+            if (!ok || !m || m.visible === false) { return; }
+            if (++count > 400) { ok = false; return; }             // too complex to be an icon (bounds perf too)
+            if (m.type === "TEXT") { ok = false; return; }
+            const fills = m.fills;
+            if (Array.isArray(fills) && fills.some(function (f) { return f && f.visible !== false && f.type === "IMAGE"; })) { ok = false; return; }
+            if (VECTOR_TYPES.indexOf(m.type) !== -1) { hasVector = true; }
+            (m.children || []).forEach(scan);
+        })(n);
+        return ok && hasVector;
+    }
+    // A node the generator exports as a flat image (and never recurses into).
+    function isFlatAsset(n) { return isPureGraphic(n) || isAsset(n); }
     function collectAssetIds(root) {
         const ids = [];
         (function walk(n) {
             if (!n || n.visible === false || ids.length >= MAX_ASSETS) { return; }
-            if (n !== root && isAsset(n)) { ids.push(n.id); return; } // don't recurse into an asset
+            if (n !== root && isFlatAsset(n)) { ids.push(n.id); return; } // export whole, don't recurse
             (n.children || []).forEach(walk);
         })(root);
         return ids;
@@ -344,7 +371,7 @@ define(function (require, exports, module) {
         const rad = radiusCss(n);
         if (rad) { d.push("border-radius:" + rad); }
         const stroke = firstVisible(n.strokes);
-        if (stroke && stroke.type === "SOLID") { d.push("border:" + (n.strokeWeight || 1) + "px solid " + tok(colorToCss(stroke.color))); }
+        if (stroke && stroke.type === "SOLID" && n.strokeWeight > 0) { d.push("border:" + n.strokeWeight + "px solid " + tok(colorToCss(stroke.color))); }
         const sh = shadowCss(n.effects);
         if (sh) { d.push("box-shadow:" + sh); }
         if (typeof n.opacity === "number" && n.opacity < 1) { d.push("opacity:" + +n.opacity.toFixed(3)); }
@@ -498,8 +525,8 @@ define(function (require, exports, module) {
         if (!n || n.visible === false || ctr.c >= MAX_ELEMENTS) { return ""; }
         ctr.c++;
 
-        // Assets: export as a flat image, never recurse.
-        if (isAsset(n)) {
+        // Assets (icons/logos/vector art): export as ONE flat image, never recurse.
+        if (isFlatAsset(n)) {
             const url = assetMap[n.id];
             const d = layoutDecls(n, parent).concat("object-fit:contain");
             if (url) { return '<img alt="' + esc(n.name) + '" src="' + esc(url) + '" style="' + styleAttr(d) + '" />'; }
@@ -1014,7 +1041,7 @@ define(function (require, exports, module) {
             ui.info = "Exporting assets…"; renderPanel();
             const assetIds = collectAssetIds(doc);
             let assetMap = {};
-            if (assetIds.length) { try { assetMap = await fetchImages(ui.fileKey, assetIds, 2); } catch (e) { assetMap = {}; } }
+            if (assetIds.length) { try { assetMap = await fetchImages(ui.fileKey, assetIds, 2, "svg"); } catch (e) { assetMap = {}; } }
             const imageRefs = collectImageRefs(doc);
             let fillMap = {};
             if (imageRefs.length) { try { fillMap = await fetchImageFills(ui.fileKey); } catch (e) { fillMap = {}; } }
@@ -1056,7 +1083,7 @@ define(function (require, exports, module) {
             ui.info = "Exporting " + assetIds.length + " icons, " + imageRefs.length + " images…"; renderPanel();
             let assetMap = {};
             if (assetIds.length) {
-                try { assetMap = await fetchImages(ui.fileKey, assetIds, 2); } catch (e) { assetMap = {}; }
+                try { assetMap = await fetchImages(ui.fileKey, assetIds, 2, "svg"); } catch (e) { assetMap = {}; }
             }
             let imageFillMap = {};
             if (imageRefs.length) {
