@@ -127,6 +127,14 @@ define(function (require, exports, module) {
         const q = "?ids=" + encodeURIComponent(ids.join(",")) + "&format=png&scale=" + (scale || getScale());
         return figmaGet("/images/" + key + q).then(function (data) { return (data && data.images) || {}; });
     }
+    // Raw source images behind every IMAGE fill in the file, keyed by imageRef. One
+    // request, deduped, uncapped, and WITHOUT overlaid children baked in - the right
+    // source for a CSS background-image (unlike the node-render /images endpoint).
+    function fetchImageFills(key) {
+        return figmaGet("/files/" + key + "/images").then(function (data) {
+            return (data && data.meta && data.meta.images) || {};
+        });
+    }
     function collectFrames(doc) {
         const out = [];
         const pages = (doc && doc.children) || [];
@@ -198,13 +206,14 @@ define(function (require, exports, module) {
         return parts.length ? parts.join(",") : null;
     }
     // A node we should export as a flat image instead of trying to rebuild it.
+    // NOTE: raster IMAGE fills are NOT flattened here - they are embedded as a CSS
+    // background on the node itself (see imageFillDecls) so overlaid children survive
+    // and scaleMode maps to background-size. Only true vectors/icons flatten to <img>.
     function isAsset(n) {
         if (!n) { return false; }
-        if (/(^|[^a-z])(icon|image|logo|avatar|illustration|img|glyph)([^a-z]|$)/i.test(n.name || "")) { return true; }
+        if (/(^|[^a-z])(icon|logo|glyph)([^a-z]|$)/i.test(n.name || "")) { return true; }
         const vt = ["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "REGULAR_POLYGON"];
         if (vt.indexOf(n.type) !== -1) { return true; }
-        const f = firstVisible(n.fills);
-        if (f && f.type === "IMAGE") { return true; }
         return false;
     }
     function collectAssetIds(root) {
@@ -216,13 +225,53 @@ define(function (require, exports, module) {
         })(root);
         return ids;
     }
+    // Topmost visible IMAGE paint on a node (last paint in the array draws on top).
+    function topImageFill(n) {
+        const fills = Array.isArray(n && n.fills) ? n.fills : [];
+        for (let i = fills.length - 1; i >= 0; i--) {
+            const f = fills[i];
+            if (f && f.visible !== false && f.type === "IMAGE") { return f; }
+        }
+        return null;
+    }
+    // Every distinct imageRef used by a visible IMAGE fill in the subtree.
+    function collectImageRefs(root) {
+        const refs = {};
+        (function walk(n) {
+            if (!n || n.visible === false) { return; }
+            const fills = Array.isArray(n.fills) ? n.fills : [];
+            fills.forEach(function (f) {
+                if (f && f.visible !== false && f.type === "IMAGE" && f.imageRef) { refs[f.imageRef] = true; }
+            });
+            (n.children || []).forEach(walk);
+        })(root);
+        return Object.keys(refs);
+    }
+    // scaleMode -> background sizing. FILL->cover, FIT->contain, TILE->repeat, STRETCH->100% 100%.
+    function scaleModeDecls(scaleMode) {
+        if (scaleMode === "FIT") { return ["background-size:contain", "background-position:center", "background-repeat:no-repeat"]; }
+        if (scaleMode === "TILE") { return ["background-repeat:repeat"]; }
+        if (scaleMode === "STRETCH") { return ["background-size:100% 100%", "background-repeat:no-repeat"]; }
+        // FILL / CROP / default -> cover, centered, no repeat.
+        return ["background-size:cover", "background-position:center", "background-repeat:no-repeat"];
+    }
+    // CSS for a node's raster image fill, embedded as a background so children survive.
+    function imageFillDecls(n, imageFillMap) {
+        if (!imageFillMap) { return []; }
+        const imgFill = topImageFill(n);
+        if (!imgFill) { return []; }
+        const url = imgFill.imageRef && imageFillMap[imgFill.imageRef];
+        if (!url) { return []; }
+        return ["background-image:url('" + esc(url) + "')"].concat(scaleModeDecls(imgFill.scaleMode));
+    }
     function px(v) { return Math.round(v) + "px"; }
 
     // Visual-only declarations (fills, radius, stroke, shadow, opacity). No layout.
-    function visualDecls(n) {
+    function visualDecls(n, imageFillMap) {
         const d = [];
         const bg = backgroundFromFills(n.fills, 1);
         if (bg) { d.push((bg.indexOf("gradient") >= 0 ? "background:" : "background-color:") + bg); }
+        d.push.apply(d, imageFillDecls(n, imageFillMap));
         const rad = radiusCss(n);
         if (rad) { d.push("border-radius:" + rad); }
         const stroke = firstVisible(n.strokes);
@@ -365,7 +414,7 @@ define(function (require, exports, module) {
     }
 
     // Recursive: build nested HTML for a node.
-    function renderNode(n, parent, assetMap, fonts, ctr) {
+    function renderNode(n, parent, assetMap, fonts, ctr, imageFillMap) {
         if (!n || n.visible === false || ctr.c >= MAX_ELEMENTS) { return ""; }
         ctr.c++;
 
@@ -374,7 +423,7 @@ define(function (require, exports, module) {
             const url = assetMap[n.id];
             const d = layoutDecls(n, parent).concat("object-fit:contain");
             if (url) { return '<img alt="' + esc(n.name) + '" src="' + esc(url) + '" style="' + d.join(";") + '" />'; }
-            return '<div data-name="' + esc(n.name) + '" style="' + d.concat(visualDecls(n)).join(";") + '"></div>';
+            return '<div data-name="' + esc(n.name) + '" style="' + d.concat(visualDecls(n, imageFillMap)).join(";") + '"></div>';
         }
 
         // Text.
@@ -387,18 +436,20 @@ define(function (require, exports, module) {
         }
 
         // Container. Height/width now come from the sizing model (layoutSizing*), so no px heuristic.
+        // A raster IMAGE fill (screenshot/photo) becomes a background here (imageFillDecls
+        // via visualDecls), so any overlaid children still render on top.
         const flex = isFlex(n);
         let d = layoutDecls(n, parent, {});
         if (flex) { d = d.concat(flexDecls(n)); }
         else { d.push("position:" + (n.layoutPositioning === "ABSOLUTE" || (parent && !isFlex(parent)) ? "absolute" : "relative")); }
         d.push(n.clipsContent ? "overflow:hidden" : "overflow:visible");
-        d = d.concat(visualDecls(n));
+        d = d.concat(visualDecls(n, imageFillMap));
         let inner = "";
-        (n.children || []).forEach(function (c) { inner += renderNode(c, n, assetMap, fonts, ctr); });
+        (n.children || []).forEach(function (c) { inner += renderNode(c, n, assetMap, fonts, ctr, imageFillMap); });
         return '<div data-name="' + esc(n.name) + '" style="' + d.join(";") + '">' + inner + '</div>';
     }
 
-    function generateFromNode(root, assetMap) {
+    function generateFromNode(root, assetMap, imageFillMap) {
         const rootBox = root.absoluteBoundingBox;
         if (!rootBox) { throw new Error("This node has no geometry to convert."); }
         const fonts = {};
@@ -413,12 +464,14 @@ define(function (require, exports, module) {
         rootDecls.push("width:" + px(rootBox.width), "margin:0 auto");
         if (!flex) { rootDecls.push("height:" + px(rootBox.height)); }
         rootDecls.push(root.clipsContent === false ? "overflow:visible" : "overflow:hidden");
-        rootDecls.push.apply(rootDecls, visualDecls(root));
+        rootDecls.push.apply(rootDecls, visualDecls(root, imageFillMap));
         const rootBg = backgroundFromFills(root.fills, 1);
-        if (!rootBg) { rootDecls.push("background:#ffffff"); }
+        // Only fall back to white when the root has neither a color/gradient nor an image fill
+        // (a bare "background:#fff" shorthand would wipe out any background-image set above).
+        if (!rootBg && !topImageFill(root)) { rootDecls.push("background:#ffffff"); }
 
         let inner = "";
-        (root.children || []).forEach(function (c) { inner += renderNode(c, root, assetMap, fonts, ctr); });
+        (root.children || []).forEach(function (c) { inner += renderNode(c, root, assetMap, fonts, ctr, imageFillMap); });
 
         const fams = Object.keys(fonts);
         let fontLink = "";
@@ -825,18 +878,24 @@ define(function (require, exports, module) {
             if (!doc) { throw new Error("Couldn't fetch that frame's details."); }
 
             const assetIds = collectAssetIds(doc);
-            ui.info = "Exporting " + assetIds.length + " icons/images…"; renderPanel();
+            const imageRefs = collectImageRefs(doc);
+            ui.info = "Exporting " + assetIds.length + " icons, " + imageRefs.length + " images…"; renderPanel();
             let assetMap = {};
             if (assetIds.length) {
                 try { assetMap = await fetchImages(ui.fileKey, assetIds, 2); } catch (e) { assetMap = {}; }
             }
+            let imageFillMap = {};
+            if (imageRefs.length) {
+                try { imageFillMap = await fetchImageFills(ui.fileKey); } catch (e) { imageFillMap = {}; }
+            }
             ui.info = "Generating…"; renderPanel();
-            const htmlDoc = generateFromNode(doc, assetMap);
+            const htmlDoc = generateFromNode(doc, assetMap, imageFillMap);
             const fileName = "figma-" + safeName(frame ? frame.name : doc.name) + ".html";
             await writeAndOpen(fileName, htmlDoc);
             ui.loading = false;
-            const got = Object.keys(assetMap).length;
-            flash("ok", "Wrote " + fileName + " (" + got + " icons exported) - turn on Live Preview.");
+            const gotIcons = Object.keys(assetMap).length;
+            const gotImages = imageRefs.filter(function (r) { return imageFillMap[r]; }).length;
+            flash("ok", "Wrote " + fileName + " (" + gotIcons + " icons, " + gotImages + " images) - turn on Live Preview.");
             renderPanel();
         } catch (e) {
             ui.loading = false; flash("err", e.message || String(e)); renderPanel();
