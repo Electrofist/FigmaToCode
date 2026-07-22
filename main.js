@@ -48,6 +48,26 @@ define(function (require, exports, module) {
 
     function getToken()   { return (prefs.get("token") || "").trim(); }
     function setToken(v)  { prefs.set("token", (v || "").trim()); prefs.save(); }
+    // Save a token then verify it against Figma (/me) so the user gets instant
+    // confirmation ("Connected as …") or a clear error, instead of finding out later.
+    function saveTokenAndValidate(v) {
+        if (!v || !v.trim()) { return; }
+        setToken(v);
+        ui.tokenCheck = { status: "checking" };
+        renderPanel();
+        figmaGet("/me").then(function (me) {
+            ui.tokenCheck = { status: "ok", who: me.email || me.handle || "you" };
+        }).catch(function (err) {
+            ui.tokenCheck = { status: "err", msg: (err && err.message) || "Token check failed." };
+        }).then(function () { renderPanel(); });
+    }
+    function tokenStatusHtml() {
+        const c = ui.tokenCheck;
+        if (!c) { return ""; }
+        if (c.status === "checking") { return '<div class="f2c-status f2c-loading">Checking token…</div>'; }
+        if (c.status === "ok") { return '<div class="f2c-status f2c-ok">✓ Connected as ' + esc(c.who) + '</div>'; }
+        return '<div class="f2c-status f2c-err">' + esc(c.msg) + '</div>';
+    }
     function isOnboarded(){ return !!prefs.get("onboarded"); }
     function setOnboarded(v){ prefs.set("onboarded", !!v); prefs.save(); }
     function getScale()   { const s = Number(prefs.get("scale")); return (s >= 1 && s <= 4) ? s : 2; }
@@ -112,11 +132,16 @@ define(function (require, exports, module) {
     // ---- Figma REST ----
     function figmaGet(path) {
         const token = getToken();
-        if (!token) { return Promise.reject(new Error("No Figma token set. Open ⚙ Settings and paste one.")); }
+        if (!token) { return Promise.reject(new Error("No Figma token set. Open the Settings gear and paste one.")); }
         return fetch(FIGMA_API + path, { headers: { "X-Figma-Token": token } })
+            .catch(function () { throw new Error("Couldn't reach Figma - check your internet connection and try again."); })
             .then(function (res) {
-                if (res.status === 403) { throw new Error("Figma rejected the token (403). Check it in ⚙ Settings."); }
-                if (res.status === 404) { throw new Error("Not found (404). Is the link correct and do you have access?"); }
+                if (res.status === 401 || res.status === 403) {
+                    throw new Error("Figma rejected your token (" + res.status + "). It may be invalid, expired, or lack access to this file - re-add it in the Settings gear.");
+                }
+                if (res.status === 404) { throw new Error("Frame or file not found (404). Check the link and that your token can open it."); }
+                if (res.status === 429) { throw new Error("Figma is rate-limiting requests (429). Wait a few seconds and try again."); }
+                if (res.status >= 500) { throw new Error("Figma had a server error (" + res.status + "). Try again shortly."); }
                 if (!res.ok) { throw new Error("Figma API error " + res.status + "."); }
                 return res.json();
             });
@@ -725,7 +750,9 @@ define(function (require, exports, module) {
             listHtml(d.steps) +
             '<div class="f2c-label">' + d.rowLabel + '</div>' +
             '<div class="f2c-row">' + d.row + '</div>';
-        if (getToken()) {
+        if (ui.tokenCheck) {
+            html += '<div style="margin-bottom:14px;">' + tokenStatusHtml() + '</div>';
+        } else if (getToken()) {
             html += '<div class="f2c-status f2c-ok" style="margin-bottom:14px;">Token saved. You are ready to import.</div>';
         }
         html += '<button type="button" class="f2c-btn-white f2c-btn-full f2c-tut-next">Start importing</button>' +
@@ -758,6 +785,7 @@ define(function (require, exports, module) {
             '</div>' +
             '<div class="f2c-note">Stored only on this machine (Phoenix preferences). Never uploaded.</div>' +
             (token ? '<div class="f2c-status f2c-ok">Token saved. <button type="button" class="f2c-link" data-test="1">Test connection</button> · <button type="button" class="f2c-link" data-clear="1">Remove</button></div>' : "") +
+            tokenStatusHtml() +
             '<div class="f2c-test-out"></div>' +
             '<div class="f2c-label" style="margin-top:16px;">Preview resolution</div>' +
             '<select class="f2c-scale">' + opts + '</select>' +
@@ -974,7 +1002,8 @@ define(function (require, exports, module) {
             ui.loading = false;
             const gotIcons = Object.keys(assetMap).length;
             const gotImages = imageRefs.filter(function (r) { return imageFillMap[r]; }).length;
-            flash("ok", "Wrote " + fileName + " (" + gotIcons + " icons, " + gotImages + " images) - turn on Live Preview.");
+            const capNote = assetIds.length >= MAX_ASSETS ? " (hit the " + MAX_ASSETS + "-icon cap, some may be missing)" : "";
+            flash("ok", "Wrote " + fileName + " (" + gotIcons + " icons, " + gotImages + " images)" + capNote + " - turn on Live Preview.");
             renderPanel();
         } catch (e) {
             ui.loading = false; flash("err", e.message || String(e)); renderPanel();
@@ -1034,8 +1063,7 @@ define(function (require, exports, module) {
 
         // tutorial: inline token save
         if ($t.closest(".f2c-tut-save-token").length) {
-            const v = $body.find(".f2c-tut-token").val();
-            if (v && v.trim()) { setToken(v); renderPanel(); }
+            saveTokenAndValidate($body.find(".f2c-tut-token").val());
             return;
         }
 
@@ -1046,11 +1074,10 @@ define(function (require, exports, module) {
 
         // settings
         if ($t.closest(".f2c-save-token").length) {
-            const val = $body.find(".f2c-token").val();
-            if (val && val.trim()) { setToken(val); renderPanel(); }
+            saveTokenAndValidate($body.find(".f2c-token").val());
             return;
         }
-        if ($t.closest("[data-clear]").length) { setToken(""); renderPanel(); return; }
+        if ($t.closest("[data-clear]").length) { setToken(""); ui.tokenCheck = null; renderPanel(); return; }
         if ($t.closest("[data-test]").length) {
             const $out = $body.find(".f2c-test-out");
             $out.html('<div class="f2c-status f2c-loading">Testing…</div>');
@@ -1101,6 +1128,9 @@ define(function (require, exports, module) {
     }
     function openPanel() {
         applyTheme();
+        // Defensive: if anything detached the panel from the DOM, re-mount it so
+        // .show() actually makes it visible (openPanel only shows an attached node).
+        if (!$panel[0] || !document.body.contains($panel[0])) { $panel.appendTo("body"); }
         if (!isOnboarded()) { ui.view = "tutorial"; ui.step = 0; }
         $panel.show();
         positionPanel();
