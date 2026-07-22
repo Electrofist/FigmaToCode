@@ -4,6 +4,15 @@ All notable changes to FigmaToCode. Versions map to phcode store releases.
 
 ## [Unreleased]
 ### Added
+- **Design tokens as CSS custom properties.** Colors backed by a reused Figma
+  color style are now emitted once in `:root` (e.g. `--orange-1: rgba(...)`) and
+  referenced with `var(--orange-1)` at each usage, instead of inlining the hex
+  everywhere. Change one line, the whole page updates. Files without color styles
+  are unchanged. (Figma Variables and spacing tokens need the Enterprise-only
+  Variables REST API, so they are out of scope for now.)
+
+## [1.0.4]
+### Added
 - **Paid path without the Figma plugin/OAuth.** "Send to Claude" now gathers the
   design with just the personal token (rendered preview + exported icons + raster
   image fills + a bounded layer structure) and packs it into the AI-panel prompt.

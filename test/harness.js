@@ -29,7 +29,7 @@ const genApi = new Function(
     "\nreturn { esc, safeName, generateFromNode, collectAssetIds, collectImageRefs, isAsset, topImageFill," +
     " visualDecls, textDecls, layoutDecls, renderNode, backgroundFromFills, colorToCss, gradientCss," +
     " radiusCss, shadowCss, imageFillDecls, scaleModeDecls, buildClaudePrompt, structureOutline," +
-    " assetLines, nodeSummary, frameUrl, px };"
+    " assetLines, nodeSummary, frameUrl, px, collectTokens, cssVarName };"
 )(6000, 120, { fileKey: "KEY", selectedId: "1:1" });
 
 // parseFigmaUrl is standalone.

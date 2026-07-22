@@ -297,15 +297,54 @@ define(function (require, exports, module) {
     function styleAttr(decls) { return decls.join(";").replace(/["<>]/g, ""); }
 
     // Visual-only declarations (fills, radius, stroke, shadow, opacity). No layout.
+    // ---- Design tokens: Figma color styles -> CSS custom properties ----
+    // If a color is backed by a reused Figma color style, emit it once in :root
+    // and reference var(--name) at each usage, instead of inlining the hex
+    // everywhere. activeTokens is set for the duration of one generateFromNode.
+    let activeTokens = null;
+    function tok(v) { return (activeTokens && v != null && activeTokens.byValue[v]) ? "var(" + activeTokens.byValue[v] + ")" : v; }
+    function cssVarName(styleName) {
+        const s = String(styleName == null ? "" : styleName).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+        return "--" + (s || "token");
+    }
+    // Walk the tree, map each style-backed solid color to a named custom property.
+    // stylesMap = the /nodes response wrapper's `styles` (styleId -> {name, styleType}).
+    function collectTokens(root, stylesMap) {
+        stylesMap = stylesMap || {};
+        const byValue = {}, defs = [], used = {};
+        function add(value, styleName) {
+            if (!value || value.indexOf("gradient") >= 0 || byValue[value]) { return; }
+            let name = cssVarName(styleName); const base = name; let i = 2;
+            while (used[name]) { name = base + "-" + i; i++; }
+            used[name] = true; byValue[value] = name; defs.push({ name: name, value: value });
+        }
+        (function walk(n) {
+            if (!n) { return; }
+            const st = n.styles;
+            if (st) {
+                const fillSid = st.fill || st.fills;
+                if (fillSid && stylesMap[fillSid] && stylesMap[fillSid].styleType === "FILL") {
+                    add(backgroundFromFills(n.fills, 1), stylesMap[fillSid].name);
+                }
+                const strokeSid = st.stroke || st.strokes;
+                if (strokeSid && stylesMap[strokeSid] && stylesMap[strokeSid].styleType === "FILL") {
+                    const s = firstVisible(n.strokes);
+                    if (s && s.type === "SOLID") { add(colorToCss(s.color), stylesMap[strokeSid].name); }
+                }
+            }
+            (n.children || []).forEach(walk);
+        })(root);
+        return { byValue: byValue, defs: defs };
+    }
     function visualDecls(n, imageFillMap) {
         const d = [];
         const bg = backgroundFromFills(n.fills, 1);
-        if (bg) { d.push((bg.indexOf("gradient") >= 0 ? "background:" : "background-color:") + bg); }
+        if (bg) { d.push((bg.indexOf("gradient") >= 0 ? "background:" : "background-color:") + tok(bg)); }
         d.push.apply(d, imageFillDecls(n, imageFillMap));
         const rad = radiusCss(n);
         if (rad) { d.push("border-radius:" + rad); }
         const stroke = firstVisible(n.strokes);
-        if (stroke && stroke.type === "SOLID") { d.push("border:" + (n.strokeWeight || 1) + "px solid " + colorToCss(stroke.color)); }
+        if (stroke && stroke.type === "SOLID") { d.push("border:" + (n.strokeWeight || 1) + "px solid " + tok(colorToCss(stroke.color))); }
         const sh = shadowCss(n.effects);
         if (sh) { d.push("box-shadow:" + sh); }
         if (typeof n.opacity === "number" && n.opacity < 1) { d.push("opacity:" + +n.opacity.toFixed(3)); }
@@ -326,7 +365,7 @@ define(function (require, exports, module) {
         const st = n.style || {};
         const d = [];
         const col = backgroundFromFills(n.fills, 1);
-        if (col) { d.push("color:" + col); }
+        if (col) { d.push("color:" + tok(col)); }
         if (st.fontSize)      { d.push("font-size:" + Math.round(st.fontSize) + "px"); }
         if (st.fontFamily)    { const ff = fontFamilyDecl(st.fontFamily, fonts); if (ff) { d.push(ff); } }
         if (st.fontWeight)    { d.push("font-weight:" + st.fontWeight); }
@@ -344,7 +383,7 @@ define(function (require, exports, module) {
         if (ov.fontWeight) { d.push("font-weight:" + ov.fontWeight); }
         if (ov.letterSpacing) { d.push("letter-spacing:" + (+ov.letterSpacing).toFixed(2) + "px"); }
         if (ov.lineHeightPx)  { d.push("line-height:" + Math.round(ov.lineHeightPx) + "px"); }
-        if (ov.fills) { const c = backgroundFromFills(ov.fills, 1); if (c) { d.push("color:" + c); } }
+        if (ov.fills) { const c = backgroundFromFills(ov.fills, 1); if (c) { d.push("color:" + tok(c)); } }
         if (ov.textCase === "UPPER") { d.push("text-transform:uppercase"); }
         else if (ov.textCase === "LOWER") { d.push("text-transform:lowercase"); }
         if (ov.textDecoration === "UNDERLINE") { d.push("text-decoration:underline"); }
@@ -490,9 +529,10 @@ define(function (require, exports, module) {
         return '<div data-name="' + esc(n.name) + '" style="' + styleAttr(d) + '">' + inner + '</div>';
     }
 
-    function generateFromNode(root, assetMap, imageFillMap) {
+    function generateFromNode(root, assetMap, imageFillMap, tokens) {
         const rootBox = root.absoluteBoundingBox;
         if (!rootBox) { throw new Error("This node has no geometry to convert."); }
+        activeTokens = (tokens && tokens.defs && tokens.defs.length) ? tokens : null;
         const fonts = {};
         const ctr = { c: 0 };
         const flex = isFlex(root);
@@ -514,6 +554,15 @@ define(function (require, exports, module) {
         let inner = "";
         (root.children || []).forEach(function (c) { inner += renderNode(c, root, assetMap, fonts, ctr, imageFillMap); });
 
+        // :root design tokens (color styles), emitted once and referenced via var().
+        let rootVars = "";
+        if (activeTokens) {
+            rootVars = "    :root {\n" +
+                activeTokens.defs.map(function (t) { return "      " + t.name + ": " + t.value + ";"; }).join("\n") +
+                "\n    }\n";
+        }
+        activeTokens = null;
+
         const fams = Object.keys(fonts);
         let fontLink = "";
         if (fams.length) {
@@ -530,6 +579,7 @@ define(function (require, exports, module) {
             "  <title>" + esc(root.name || "Figma export") + "</title>",
             fontLink +
             "  <style>",
+            rootVars +
             "    * { margin: 0; padding: 0; box-sizing: border-box; }",
             "    body { display: flex; justify-content: center; background: #f4f4f5; padding: 24px; }",
             "    .figma-root img { display: block; max-width: 100%; }",
@@ -1013,14 +1063,16 @@ define(function (require, exports, module) {
                 try { imageFillMap = await fetchImageFills(ui.fileKey); } catch (e) { imageFillMap = {}; }
             }
             ui.info = "Generating…"; renderPanel();
-            const htmlDoc = generateFromNode(doc, assetMap, imageFillMap);
+            const tokens = collectTokens(doc, (wrap && wrap.styles) || {});
+            const htmlDoc = generateFromNode(doc, assetMap, imageFillMap, tokens);
             const fileName = "figma-" + safeName(frame ? frame.name : doc.name) + ".html";
             await writeAndOpen(fileName, htmlDoc);
             ui.loading = false;
             const gotIcons = Object.keys(assetMap).length;
             const gotImages = imageRefs.filter(function (r) { return imageFillMap[r]; }).length;
+            const gotTokens = tokens.defs.length;
             const capNote = assetIds.length >= MAX_ASSETS ? " (hit the " + MAX_ASSETS + "-icon cap, some may be missing)" : "";
-            flash("ok", "Wrote " + fileName + " (" + gotIcons + " icons, " + gotImages + " images)" + capNote + " - turn on Live Preview.");
+            flash("ok", "Wrote " + fileName + " (" + gotIcons + " icons, " + gotImages + " images" + (gotTokens ? ", " + gotTokens + " color tokens" : "") + ")" + capNote + " - turn on Live Preview.");
             renderPanel();
         } catch (e) {
             ui.loading = false; flash("err", e.message || String(e)); renderPanel();

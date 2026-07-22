@@ -23,6 +23,9 @@ jobs:
       - name: Generator tests
         run: node test/generator.test.js
 
+      - name: Design-token tests
+        run: node test/tokens.test.js
+
       - name: Stress + fuzz suite
         run: node test/stress.test.js
 
