@@ -23,5 +23,8 @@ jobs:
       - name: Generator tests
         run: node test/generator.test.js
 
+      - name: Asset-embedding guard rail
+        run: node test/assets.test.js
+
       - name: Release-manifest integrity
         run: node scripts/check-release-manifest.js
