@@ -58,6 +58,7 @@
     box-shadow: none !important;
     height: auto !important;
     min-height: 0 !important;
+    margin: 0 !important;
     -webkit-appearance: none !important; appearance: none !important;
     color: var(--z200, #e4e4e7); font-family: inherit;
 }
@@ -118,7 +119,10 @@
 .f2c-label { font-size: 13px; color: var(--z400); margin-bottom: 8px; }
 
 /* ---- Bordered input + button row (the "invite link + Copy" pattern) ---- */
-.f2c-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+/* Stretch so the button always matches the field's height exactly (the field is
+   1px taller from its border; stretching avoids any residual mismatch). */
+.f2c-row { display: flex; align-items: stretch; gap: 8px; margin-bottom: 14px; }
+.f2c-row .f2c-btn-white, .f2c-row .f2c-btn-ghost { display: inline-flex; align-items: center; justify-content: center; }
 .f2c-field {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
     background: var(--z800); border: 1px solid var(--z700); border-radius: 9px; padding: 9px 12px;
