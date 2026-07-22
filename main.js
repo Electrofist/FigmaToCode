@@ -36,7 +36,6 @@ define(function (require, exports, module) {
     const MAX_FRAMES   = 40;
     const MAX_ELEMENTS = 6000;
     const MAX_ASSETS   = 120;
-    const PLUGIN_CMD   = "claude plugin install figma@claude-plugins-official";
 
     // -------- Storage --------
     const prefs = PreferencesManager.getExtensionPrefs("figmaToCode");
@@ -566,8 +565,8 @@ define(function (require, exports, module) {
         $panel.find(".f2c-nav-btn").each(function () {
             $(this).toggleClass("f2c-nav-active", $(this).attr("data-view") === ui.view);
         });
-        // Red dot on the settings gear when a token is needed but missing.
-        const needsToken = getSeat() !== "paid" && !getToken();
+        // Red dot on the settings gear when a token is missing (both tiers need one now).
+        const needsToken = !getToken();
         $panel.find('.f2c-nav-btn[data-view="settings"]').toggleClass("f2c-nav-alert", needsToken);
     }
     function statusHtml() {
@@ -665,17 +664,21 @@ define(function (require, exports, module) {
     // ---- Tutorial: single "How it works" card (clone of the reference) ----
     function tutorialData() {
         if (getSeat() === "paid") {
+            const ptk = getToken();
             return {
                 paid: true,
                 title: "Design to code, exactly",
                 steps: [
-                    { icon: "plug",   text: "Install the Figma plugin for Claude Code" },
-                    { icon: "shield", text: "Authorize once: <b>/plugin</b> → figma → Allow access" },
-                    { icon: "send",   text: "Paste a link, pick a frame, hit <b>Send to Claude</b>" }
+                    { icon: "key",   text: "Create a Figma token in <b>Settings → Security</b>" },
+                    { icon: "link",  text: "Paste a frame link into <b>Import</b>" },
+                    { icon: "image", text: "Pick the frame you want" },
+                    { icon: "send",  text: "Hit <b>Send to Claude</b> - it builds pixel-perfect code in the AI panel" }
                 ],
-                rowLabel: "Install command:",
-                row: '<div class="f2c-field">' + svg("code") + '<code>' + esc(PLUGIN_CMD) + '</code></div>' +
-                     '<button type="button" class="f2c-btn-white" data-copy="' + esc(PLUGIN_CMD) + '">Copy</button>'
+                rowLabel: "Your Figma token:",
+                row: '<div class="f2c-field">' + svg("key") +
+                     '<input type="password" class="f2c-tut-token" placeholder="' + (ptk ? "figd_ saved, paste to replace" : "figd_") + '" />' +
+                     '</div>' +
+                     '<button type="button" class="f2c-btn-white f2c-tut-save-token">Save</button>'
             };
         }
         const tk = getToken();
@@ -722,7 +725,7 @@ define(function (require, exports, module) {
             listHtml(d.steps) +
             '<div class="f2c-label">' + d.rowLabel + '</div>' +
             '<div class="f2c-row">' + d.row + '</div>';
-        if (!d.paid && getToken()) {
+        if (getToken()) {
             html += '<div class="f2c-status f2c-ok" style="margin-bottom:14px;">Token saved. You are ready to import.</div>';
         }
         html += '<button type="button" class="f2c-btn-white f2c-btn-full f2c-tut-next">Start importing</button>' +
@@ -745,25 +748,20 @@ define(function (require, exports, module) {
             '<div class="f2c-row"><div class="f2c-field"><span class="f2c-field-text">' + seatLabel + '</span></div>' +
                 '<button type="button" class="f2c-btn-ghost" data-reseat="1">Change</button></div>';
 
-        if (seat !== "paid") {
-            html += '<div class="f2c-label">Figma personal access token</div>' +
-                (!token ? '<div class="f2c-warn">⚠ No figma token yet.</div>' : '') +
-                '<div class="f2c-row">' +
-                    '<div class="f2c-field">' + svg("key") + '<input type="password" class="f2c-token" placeholder="' + (token ? esc(masked) : "figd_") + '" /></div>' +
-                    '<button type="button" class="f2c-btn-white f2c-save-token">Save</button>' +
-                '</div>' +
-                '<div class="f2c-note">Stored only on this machine (Phoenix preferences). Never uploaded.</div>' +
-                (token ? '<div class="f2c-status f2c-ok">Token saved. <button type="button" class="f2c-link" data-test="1">Test connection</button> · <button type="button" class="f2c-link" data-clear="1">Remove</button></div>' : "") +
-                '<div class="f2c-test-out"></div>' +
-                '<div class="f2c-label" style="margin-top:16px;">Preview resolution</div>' +
-                '<select class="f2c-scale">' + opts + '</select>' +
-                '<div class="f2c-note">Higher is sharper but slower to load.</div>';
-        } else {
-            html += '<div class="f2c-note" style="margin-top:14px;">Paid path generates through Claude, no token needed.</div>' +
-                '<div class="f2c-label" style="margin-top:14px;">Install command</div>' +
-                '<div class="f2c-row"><div class="f2c-field">' + svg("code") + '<code>' + esc(PLUGIN_CMD) + '</code></div>' +
-                '<button type="button" class="f2c-btn-white" data-copy="' + esc(PLUGIN_CMD) + '">Copy</button></div>';
-        }
+        // Both tiers use the personal token now (paid packs the design into the
+        // Claude prompt via the token - no plugin/OAuth).
+        html += '<div class="f2c-label">Figma personal access token</div>' +
+            (!token ? '<div class="f2c-warn">⚠ No figma token yet.</div>' : '') +
+            '<div class="f2c-row">' +
+                '<div class="f2c-field">' + svg("key") + '<input type="password" class="f2c-token" placeholder="' + (token ? esc(masked) : "figd_") + '" /></div>' +
+                '<button type="button" class="f2c-btn-white f2c-save-token">Save</button>' +
+            '</div>' +
+            '<div class="f2c-note">Stored only on this machine (Phoenix preferences). Never uploaded.</div>' +
+            (token ? '<div class="f2c-status f2c-ok">Token saved. <button type="button" class="f2c-link" data-test="1">Test connection</button> · <button type="button" class="f2c-link" data-clear="1">Remove</button></div>' : "") +
+            '<div class="f2c-test-out"></div>' +
+            '<div class="f2c-label" style="margin-top:16px;">Preview resolution</div>' +
+            '<select class="f2c-scale">' + opts + '</select>' +
+            '<div class="f2c-note">Higher is sharper but slower to load' + (seat === "paid" ? " (paid also sends this render to Claude)" : "") + '.</div>';
         html += '<div class="f2c-settings-footer"><button type="button" class="f2c-link" data-go="tutorial">Replay tutorial</button></div></div>';
         $body.html(html);
     }
@@ -821,17 +819,74 @@ define(function (require, exports, module) {
         }
     }
 
-    // Paid path - inject the prompt straight into the Claude AI panel and submit.
-    function buildClaudePrompt() {
+    // Paid path - gather the design via the personal token (no plugin/OAuth) and
+    // pack it INTO the Claude prompt, then inject + submit in the AI panel.
+    // One-line summary of a node for the structure outline.
+    function nodeSummary(n) {
+        const parts = [n.type];
+        if (n.name) { parts.push('"' + String(n.name).slice(0, 40) + '"'); }
+        const b = n.absoluteBoundingBox;
+        if (b) { parts.push(Math.round(b.width) + "x" + Math.round(b.height)); }
+        if (isFlex(n)) { parts.push("auto-layout:" + n.layoutMode.toLowerCase() + (n.itemSpacing ? " gap:" + Math.round(n.itemSpacing) : "")); }
+        if (n.type === "TEXT" && n.characters) {
+            parts.push("text=" + JSON.stringify(n.characters.slice(0, 80)));
+            const st = n.style || {};
+            if (st.fontSize) { parts.push(Math.round(st.fontSize) + "px" + (st.fontWeight ? "/" + st.fontWeight : "")); }
+            const col = backgroundFromFills(n.fills, 1); if (col) { parts.push(col); }
+        } else {
+            const bg = backgroundFromFills(n.fills, 1); if (bg) { parts.push("bg=" + bg); }
+        }
+        return parts.join(" ");
+    }
+    // Indented layer tree (bounded) so the prompt stays reasonable.
+    function structureOutline(root, maxLines) {
+        const lines = [];
+        (function walk(n, depth) {
+            if (!n || n.visible === false || lines.length >= maxLines) { return; }
+            lines.push(new Array(depth + 1).join("  ") + "- " + nodeSummary(n));
+            (n.children || []).forEach(function (c) { walk(c, depth + 1); });
+        })(root, 0);
+        if (lines.length >= maxLines) { lines.push("  ... (truncated)"); }
+        return lines.join("\n");
+    }
+    // Exported asset URLs (icons/vectors + raster image fills) with layer names.
+    function assetLines(root, assetMap, fillMap) {
+        const lines = [];
+        (function walk(n) {
+            if (!n || n.visible === false) { return; }
+            if (n !== root && isAsset(n)) { if (assetMap[n.id]) { lines.push('- "' + (n.name || n.type) + '" (' + n.type + '): ' + assetMap[n.id]); } return; }
+            const imgf = topImageFill(n);
+            if (imgf && imgf.imageRef && fillMap[imgf.imageRef]) { lines.push('- "' + (n.name || n.type) + '" (image fill, ' + (imgf.scaleMode || "FILL") + '): ' + fillMap[imgf.imageRef]); }
+            (n.children || []).forEach(walk);
+        })(root);
+        return lines;
+    }
+    function buildClaudePrompt(doc, previewUrl, assetMap, fillMap) {
         const url = frameUrl(ui.fileKey, ui.selectedId);
-        const name = (ui.frames.filter(function (f) { return f.id === ui.selectedId; })[0] || {}).name || "frame";
-        return (
-            "Implement this Figma frame as clean, responsive HTML & CSS into my current Phoenix Code project, " +
-            "matching the design exactly. Use the Figma design-to-code flow (get_design_context). Export and use " +
-            "ALL real icons/images from the design - never hand-draw or omit them. Write it to a new .html file in " +
-            "the project and open Live Preview when done.\n\n" +
-            "Frame (" + name + "): " + url
-        );
+        const name = doc.name || "frame";
+        const box = doc.absoluteBoundingBox || {};
+        const assets = assetLines(doc, assetMap, fillMap);
+        const p = [];
+        p.push("Build this Figma frame as clean, semantic, responsive HTML & CSS in my current Phoenix Code project, matching the design exactly. Write it to a new .html file and open Live Preview when done.");
+        p.push("");
+        p.push('Frame: "' + name + '"  ' + Math.round(box.width) + "x" + Math.round(box.height) + "px");
+        p.push("Figma link: " + url);
+        if (previewUrl) {
+            p.push("");
+            p.push("Rendered design (visual source of truth): " + previewUrl);
+            p.push("If you can view or download images, fetch that PNG and match it pixel for pixel. In Claude Code: download it (curl) and use Read to view it, then implement.");
+        }
+        p.push("");
+        p.push("If the Figma design-to-code tool (get_design_context / Figma MCP) is available, prefer it for this frame. Otherwise use the exact assets + structure below.");
+        if (assets.length) {
+            p.push("");
+            p.push("Exported assets - use these EXACT URLs, never invent or omit icons/images (URLs expire in ~7 days):");
+            assets.slice(0, 120).forEach(function (a) { p.push(a); });
+        }
+        p.push("");
+        p.push("Layer structure (indent = nesting; sizes in px):");
+        p.push(structureOutline(doc, 220));
+        return p.join("\n");
     }
     function fillClaudeInput(text) {
         const ta = document.querySelector(".ai-chat-textarea");
@@ -846,23 +901,47 @@ define(function (require, exports, module) {
         ta.focus();
         return true;
     }
-    function sendToClaude() {
+    async function sendToClaude() {
         if (!ui.selectedId || !ui.fileKey) { return; }
-        const prompt = buildClaudePrompt();
-        const filled = fillClaudeInput(prompt);
-        const sendBtn = document.querySelector(".ai-send-btn");
-        if (filled && sendBtn) {
-            // let the input state settle, then submit
-            setTimeout(function () { try { sendBtn.click(); } catch (e) { /* ignore */ } }, 80);
-            flash("ok", "Sent to Claude ✓ - it's generating accurate code in the AI panel.");
-            renderPanel();
-            setTimeout(closePanel, 700);
-        } else {
-            // Fallback: no panel found -> copy to clipboard.
-            copyToClipboard(prompt).then(function () {
-                flash("ok", "Claude panel not found - prompt copied. Paste it into the AI panel.");
+        // Both tiers need a token now. No token -> same inline nudge as the free path.
+        if (!getToken()) {
+            ui.needTokenMsg = true; ui.error = ""; ui.info = ""; ui.view = "import"; renderPanel();
+            return;
+        }
+        ui.loading = true; ui.error = ""; ui.info = "Reading frame…"; renderPanel();
+        try {
+            const data = await figmaGet("/files/" + ui.fileKey + "/nodes?ids=" + encodeURIComponent(ui.selectedId) + "&geometry=paths");
+            const doc = data.nodes && data.nodes[ui.selectedId] && data.nodes[ui.selectedId].document;
+            if (!doc) { throw new Error("Couldn't fetch that frame's details."); }
+            ui.info = "Rendering preview…"; renderPanel();
+            let previewUrl = null;
+            try { const pm = await fetchImages(ui.fileKey, [ui.selectedId], 2); previewUrl = pm[ui.selectedId] || null; } catch (e) { previewUrl = null; }
+            ui.info = "Exporting assets…"; renderPanel();
+            const assetIds = collectAssetIds(doc);
+            let assetMap = {};
+            if (assetIds.length) { try { assetMap = await fetchImages(ui.fileKey, assetIds, 2); } catch (e) { assetMap = {}; } }
+            const imageRefs = collectImageRefs(doc);
+            let fillMap = {};
+            if (imageRefs.length) { try { fillMap = await fetchImageFills(ui.fileKey); } catch (e) { fillMap = {}; } }
+
+            const prompt = buildClaudePrompt(doc, previewUrl, assetMap, fillMap);
+            const filled = fillClaudeInput(prompt);
+            const sendBtn = document.querySelector(".ai-send-btn");
+            ui.loading = false;
+            if (filled && sendBtn) {
+                setTimeout(function () { try { sendBtn.click(); } catch (e) { /* ignore */ } }, 120);
+                flash("ok", "Sent to Claude ✓ - building accurate code in the AI panel.");
                 renderPanel();
-            });
+                setTimeout(closePanel, 900);
+            } else {
+                // No AI panel -> copy the full prompt so the user can paste it.
+                copyToClipboard(prompt).then(function () {
+                    flash("ok", "AI panel not found - full prompt copied. Open the AI panel and paste it.");
+                    renderPanel();
+                });
+            }
+        } catch (e) {
+            ui.loading = false; flash("err", e.message || String(e)); renderPanel();
         }
     }
 
