@@ -21,8 +21,18 @@ All notable changes to FigmaToCode. Versions map to phcode store releases.
 - Warn when the 120-icon export cap is hit.
 
 ### Fixed
+- **Security: font-family injection.** A Figma font name containing a `"`/`<`
+  could break out of the generated inline `style` attribute (`x"><script>...`),
+  injecting markup into the output opened in Live Preview. Font names are now
+  sanitized to a safe character set. Found by the fuzz suite.
 - Panel re-mounts if it was ever detached from the DOM (toolbar button could
   otherwise silently no-op).
+
+### Testing
+- `test/stress.test.js` + `test/harness.js`: seeded fuzzer (thousands of
+  synthetic Figma trees) + edge cases asserting the generator and paid-path
+  prompt builder never throw / emit `undefined`/`NaN` / break HTML escaping,
+  plus `figmaGet` error-mapping and `parseFigmaUrl` cases. Wired into CI.
 
 ## [1.0.3]
 ### Fixed

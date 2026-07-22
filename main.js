@@ -305,13 +305,24 @@ define(function (require, exports, module) {
         if (typeof n.opacity === "number" && n.opacity < 1) { d.push("opacity:" + +n.opacity.toFixed(3)); }
         return d;
     }
+    // Font family names go straight into an inline style="" attribute, so strip
+    // anything that could break out of the attribute or the CSS string (a name
+    // like x"><script> would otherwise inject markup into the generated file).
+    // Real font names are letters/digits/spaces/hyphens.
+    function safeFontFamily(f) { return String(f == null ? "" : f).replace(/[^A-Za-z0-9 _-]/g, "").trim(); }
+    function fontFamilyDecl(name, fonts) {
+        const ff = safeFontFamily(name);
+        if (!ff) { return null; }
+        fonts[ff] = true;
+        return "font-family:'" + ff + "',sans-serif";
+    }
     function textDecls(n, fonts) {
         const st = n.style || {};
         const d = [];
         const col = backgroundFromFills(n.fills, 1);
         if (col) { d.push("color:" + col); }
         if (st.fontSize)      { d.push("font-size:" + Math.round(st.fontSize) + "px"); }
-        if (st.fontFamily)    { fonts[st.fontFamily] = true; d.push("font-family:'" + st.fontFamily.replace(/'/g, "") + "',sans-serif"); }
+        if (st.fontFamily)    { const ff = fontFamilyDecl(st.fontFamily, fonts); if (ff) { d.push(ff); } }
         if (st.fontWeight)    { d.push("font-weight:" + st.fontWeight); }
         if (st.lineHeightPx)  { d.push("line-height:" + Math.round(st.lineHeightPx) + "px"); }
         if (st.letterSpacing) { d.push("letter-spacing:" + (+st.letterSpacing).toFixed(2) + "px"); }
@@ -323,7 +334,7 @@ define(function (require, exports, module) {
     function runStyleCss(ov, fonts) {
         const d = [];
         if (ov.fontSize)   { d.push("font-size:" + Math.round(ov.fontSize) + "px"); }
-        if (ov.fontFamily) { fonts[ov.fontFamily] = true; d.push("font-family:'" + ov.fontFamily.replace(/'/g, "") + "',sans-serif"); }
+        if (ov.fontFamily) { const ff = fontFamilyDecl(ov.fontFamily, fonts); if (ff) { d.push(ff); } }
         if (ov.fontWeight) { d.push("font-weight:" + ov.fontWeight); }
         if (ov.letterSpacing) { d.push("letter-spacing:" + (+ov.letterSpacing).toFixed(2) + "px"); }
         if (ov.lineHeightPx)  { d.push("line-height:" + Math.round(ov.lineHeightPx) + "px"); }

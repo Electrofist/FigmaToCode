@@ -23,6 +23,9 @@ jobs:
       - name: Generator tests
         run: node test/generator.test.js
 
+      - name: Stress + fuzz suite
+        run: node test/stress.test.js
+
       - name: Asset-embedding guard rail
         run: node test/assets.test.js
 

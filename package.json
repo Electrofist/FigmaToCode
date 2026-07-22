@@ -10,8 +10,8 @@
         "brackets": ">=2.0.0"
     },
     "scripts": {
-        "test": "node test/generator.test.js && node test/assets.test.js",
-        "check": "node --check main.js && node test/generator.test.js && node test/assets.test.js && node scripts/check-release-manifest.js"
+        "test": "node test/generator.test.js && node test/assets.test.js && node test/stress.test.js",
+        "check": "node --check main.js && node test/generator.test.js && node test/assets.test.js && node test/stress.test.js && node scripts/check-release-manifest.js"
     },
     "categories": "design",
     "keywords": [
