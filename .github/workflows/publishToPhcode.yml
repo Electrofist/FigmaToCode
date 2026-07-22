@@ -15,9 +15,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build extension.zip
-        # Zip only the files Phoenix actually needs at runtime, matching the
-        # "files" array in package.json. Add LICENSE for good citizenship.
-        run: zip -r extension.zip main.js style.css package.json LICENSE
+        # Zip the files Phoenix needs at runtime, matching the "files" array in
+        # package.json. logo.png (toolbar icon) and hero.jpg (tutorial banner)
+        # MUST be included or the store build renders no icon/banner. Add LICENSE
+        # for good citizenship.
+        run: zip -r extension.zip main.js style.css package.json logo.png hero.jpg LICENSE
 
       - name: Attach extension.zip to the release
         env:
