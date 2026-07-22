@@ -1,0 +1,27 @@
+name: CI
+
+# Guards every push / PR: syntax, generator behaviour, and release-packaging
+# integrity (so a missing asset or bad version can't reach a release).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Syntax check (main.js)
+        run: node --check main.js
+
+      - name: Generator tests
+        run: node test/generator.test.js
+
+      - name: Release-manifest integrity
+        run: node scripts/check-release-manifest.js
