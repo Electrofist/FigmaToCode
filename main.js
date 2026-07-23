@@ -266,7 +266,15 @@ define(function (require, exports, module) {
         return ok && hasVector;
     }
     // A node the generator exports as a flat image (and never recurses into).
-    function isFlatAsset(n) { return isPureGraphic(n) || isAsset(n); }
+    // Degenerate/thin nodes (LINE, hairlines) rasterize to broken 0-height images,
+    // so exclude them - they render fine as normal thin divs / stroke borders.
+    function isFlatAsset(n) {
+        if (!n) { return false; }
+        if (n.type === "LINE") { return false; }
+        const box = n.absoluteBoundingBox;
+        if (box && (box.width < 3 || box.height < 3)) { return false; }
+        return isPureGraphic(n) || isAsset(n);
+    }
     function collectAssetIds(root) {
         const ids = [];
         (function walk(n) {
@@ -1041,7 +1049,7 @@ define(function (require, exports, module) {
             ui.info = "Exporting assets…"; renderPanel();
             const assetIds = collectAssetIds(doc);
             let assetMap = {};
-            if (assetIds.length) { try { assetMap = await fetchImages(ui.fileKey, assetIds, 2, "svg"); } catch (e) { assetMap = {}; } }
+            if (assetIds.length) { try { assetMap = await fetchImages(ui.fileKey, assetIds, 2); } catch (e) { assetMap = {}; } }
             const imageRefs = collectImageRefs(doc);
             let fillMap = {};
             if (imageRefs.length) { try { fillMap = await fetchImageFills(ui.fileKey); } catch (e) { fillMap = {}; } }
@@ -1083,7 +1091,7 @@ define(function (require, exports, module) {
             ui.info = "Exporting " + assetIds.length + " icons, " + imageRefs.length + " images…"; renderPanel();
             let assetMap = {};
             if (assetIds.length) {
-                try { assetMap = await fetchImages(ui.fileKey, assetIds, 2, "svg"); } catch (e) { assetMap = {}; }
+                try { assetMap = await fetchImages(ui.fileKey, assetIds, 2); } catch (e) { assetMap = {}; }
             }
             let imageFillMap = {};
             if (imageRefs.length) {
