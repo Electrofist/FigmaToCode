@@ -3,6 +3,17 @@
 All notable changes to FigmaToCode. Versions map to phcode store releases.
 
 ## [Unreleased]
+### Fixed
+- **Icons and logos no longer fragment or go missing (token path).** The generator
+  exported every individual vector path as its own image, so multi-path icons
+  shredded into pieces and a single 156-path icon blew the whole export budget,
+  leaving other icons as empty bordered boxes. Now a small all-vector group (an
+  icon/logo) exports as ONE image, degenerate/thin nodes (lines) are not
+  rasterized, and 0-weight strokes no longer draw spurious borders. Whole-page
+  fidelity is substantially improved. (One unusual "logos row" structure can still
+  garble; targeted fix is future work.)
+
+## [1.0.5]
 ### Added
 - **Design tokens as CSS custom properties.** Colors backed by a reused Figma
   color style are now emitted once in `:root` (e.g. `--orange-1: rgba(...)`) and
@@ -10,6 +21,8 @@ All notable changes to FigmaToCode. Versions map to phcode store releases.
   everywhere. Change one line, the whole page updates. Files without color styles
   are unchanged. (Figma Variables and spacing tokens need the Enterprise-only
   Variables REST API, so they are out of scope for now.)
+### Added (tests)
+- Error-path, perf/pathological, and golden-snapshot test suites; CI on all branches.
 
 ## [1.0.4]
 ### Added
