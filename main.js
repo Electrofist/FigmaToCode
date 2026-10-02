@@ -849,7 +849,10 @@ define(function (require, exports, module) {
         html += statusHtml();
 
         if (ui.frames.length) {
-            html += '<div class="f2c-hint">' + esc(ui.fileName || "") + ' - pick a frame, then ' + (paid ? "Send to Claude." : "Get code.") + '</div>';
+            html += '<div class="f2c-filehead">' +
+                '<span class="f2c-filename" title="' + esc(ui.fileName || "") + '">' + esc(ui.fileName || "Figma file") + '</span>' +
+                '<span class="f2c-filecount">' + ui.frames.length + (ui.frames.length === 1 ? " frame" : " frames") + '</span>' +
+            '</div>';
             html += '<div class="f2c-grid' + (ui.busy ? " f2c-grid-locked" : "") + '">';
             ui.frames.forEach(function (f) {
                 const sel = (f.id === ui.selectedId) ? " f2c-selected" : "";
@@ -861,8 +864,10 @@ define(function (require, exports, module) {
             });
             html += '</div>';
             const label = paid ? "Send to Claude" : "Get code";
-            html += '<button type="button" class="f2c-btn-white f2c-btn-full f2c-getcode-btn"' + (ui.selectedId && !locked ? "" : " disabled") + '>' +
-                (ui.busy ? '<span class="f2c-spin f2c-spin-dark"></span>Working…' : (ui.selectedId ? label : "Pick a frame first")) + '</button>';
+            // Sticky so the main action stays reachable with a long frame list.
+            html += '<div class="f2c-actionbar">' +
+                '<button type="button" class="f2c-btn-white f2c-btn-full f2c-getcode-btn"' + (ui.selectedId && !locked ? "" : " disabled") + '>' +
+                (ui.busy ? '<span class="f2c-spin f2c-spin-dark"></span>Working…' : (ui.selectedId ? label : "Pick a frame first")) + '</button></div>';
         }
 
         // Tip pinned to the bottom
@@ -912,16 +917,16 @@ define(function (require, exports, module) {
             return;
         }
         const d = tutorialData();
-        const has = !!getToken();
+        const has = !!getToken() && !ui.tokenBad;
         let html = heroHtml(d.paid) + '<div class="f2c-pad">' +
             '<div class="f2c-title">' + d.title + '</div>' +
             '<div class="f2c-sub">How it works:</div>' +
             listHtml(d.steps) +
             '<div class="f2c-label">Your Figma token' + (has ? "" : ' <span class="f2c-required">required</span>') + '</div>' +
-            tokenRowHtml(has ? "Saved. Paste a new one to replace it" : "figd_…");
+            tokenRowHtml(has ? "Saved. Paste a new one to replace it" : (getToken() ? "Paste a new token" : "figd_…"));
         if (ui.tokenCheck) {
             html += tokenStatusHtml();
-        } else if (has && ui.tokenBad) {
+        } else if (getToken() && ui.tokenBad) {
             html += '<div class="f2c-status f2c-err" role="alert">Your saved token no longer works. Paste a new one above.</div>';
         } else if (has) {
             html += '<div class="f2c-status f2c-ok" role="status">✓ Token saved. You are ready to import.</div>';
@@ -1026,7 +1031,7 @@ define(function (require, exports, module) {
         ui.frames = frames;
         if (frames.length === 1) { ui.selectedId = frames[0].id; }
         ui.loading = false;
-        flash("ok", frames.length === 1 ? "Frame loaded." : (frames.length + " frames loaded. Pick one."));
+        flash("ok", ""); // the file header + frame grid already say it loaded
         renderPanel();
         // Thumbnails are a nice-to-have: if they fail, the frames still work.
         try {
@@ -1293,7 +1298,7 @@ define(function (require, exports, module) {
         // tutorial: finish -> go to Import. Requires a saved token; if one is
         // typed but not saved yet, save+check it first and continue on success.
         if ($t.closest(".f2c-tut-next").length) {
-            if (getToken()) { finishTutorial(); return; }
+            if (getToken() && !ui.tokenBad) { finishTutorial(); return; }
             const typed = String($body.find(".f2c-token-input").val() || "").trim();
             if (typed) { ui.tutError = ""; saveTokenAndValidate(typed, finishTutorial); return; }
             ui.tutError = "Save your Figma token to continue. Every import needs it.";
