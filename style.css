@@ -263,3 +263,67 @@
 
 /* actions row */
 .f2c-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
+
+/* ---- States: errors, busy, disabled, focus (v1.0.7 UX pass) ---- */
+.f2c-title-sm { font-size: 16px; }
+.f2c-title-md { font-size: 18px; }
+.f2c-mt { margin-top: 14px; }
+.f2c-required {
+    margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.02em; color: #f0655e; background: color-mix(in srgb, #f0655e 14%, transparent);
+    vertical-align: 1px;
+}
+
+/* Inline field error: red border + message right under the field. */
+.f2c-field { transition: border-color 0.14s, box-shadow 0.14s; }
+.f2c-field:focus-within { border-color: var(--z500); }
+.f2c-field-err, .f2c-field-err:focus-within { border-color: var(--red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 18%, transparent); }
+.f2c-composer-err, .f2c-composer-err:focus-within { border-color: var(--red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 15%, transparent); }
+.f2c-field-msg { color: var(--red); font-size: 12px; line-height: 1.45; margin: 6px 2px 4px; }
+.f2c-row + .f2c-note { margin: -6px 0 10px; }
+#f2c-panel input:disabled, .f2c-panel input:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Composer: hint on the left, send button lights up once there is a link. */
+.f2c-composer-hint { font-size: 11.5px; color: var(--z500); }
+.f2c-round-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.f2c-round-btn[disabled]:hover { background: var(--z700); color: var(--z300); }
+.f2c-round-btn[disabled]:active { transform: none; }
+.f2c-round-ready { background: var(--white); color: var(--z900); }
+.f2c-round-ready:hover { background: var(--z300); color: var(--z900); }
+
+/* Busy buttons + spinner */
+.f2c-btn-white[disabled]:hover { background: var(--white); }
+.f2c-btn-white[disabled]:active { transform: none; }
+.f2c-btn-white, .f2c-btn-ghost { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.f2c-btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
+.f2c-getcode-btn { margin-top: 14px; }
+.f2c-spin {
+    display: inline-block; flex: 0 0 auto; width: 12px; height: 12px; margin-right: 8px; vertical-align: -2px;
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+    animation: f2c-rot 0.7s linear infinite;
+}
+.f2c-btn-white .f2c-spin, .f2c-round-btn .f2c-spin, .f2c-frame-ph .f2c-spin { margin-right: 0; }
+.f2c-spin-dark { color: var(--z900); }
+@keyframes f2c-rot { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .f2c-spin { animation-duration: 1.6s; }
+    .f2c-panel { animation: none; }
+    .f2c-frame:hover, .f2c-seat-card:hover { transform: none; }
+}
+
+/* Status with an action on the right (e.g. "Add token") */
+.f2c-status-action { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.f2c-status-links { display: inline-flex; gap: 12px; }
+.f2c-status .f2c-link { color: inherit; }
+
+/* Frames locked while a job runs */
+.f2c-grid-locked .f2c-frame { cursor: not-allowed; }
+.f2c-grid-locked .f2c-frame:not(.f2c-selected) { opacity: 0.45; }
+.f2c-frame[disabled]:hover { transform: none; }
+.f2c-frame-ph { font-size: 11.5px; }
+
+/* Visible keyboard focus everywhere in the panel */
+.f2c-panel button:focus { outline: none; }
+.f2c-panel button:focus-visible, .f2c-panel select:focus-visible {
+    outline: 2px solid var(--white); outline-offset: 2px;
+}

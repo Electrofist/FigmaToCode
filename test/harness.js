@@ -37,6 +37,9 @@ const genApi = new Function(
 // parseFigmaUrl is standalone.
 const parseApi = new Function(parseRegion + "\nreturn parseFigmaUrl;")();
 
+// Panel input checks (live between parseFigmaUrl and frameUrl in main.js).
+const inputApi = new Function(parseRegion + "\nreturn { checkUrlInput, checkTokenInput };")();
+
 // figmaGet with injectable fetch + token (for error-mapping tests).
 function makeFigmaGet(fetchStub, token) {
     return new Function(
@@ -45,4 +48,4 @@ function makeFigmaGet(fetchStub, token) {
     )(function () { return token; }, fetchStub, "https://api.figma.com/v1");
 }
 
-module.exports = { genApi, parseFigmaUrl: parseApi, makeFigmaGet, SRC };
+module.exports = { genApi, parseFigmaUrl: parseApi, inputs: inputApi, makeFigmaGet, SRC };

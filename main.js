@@ -36,6 +36,7 @@ define(function (require, exports, module) {
     const MAX_FRAMES   = 40;
     const MAX_ELEMENTS = 6000;
     const MAX_ASSETS   = 120;
+    const TOKEN_HELP_URL = "https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens";
 
     // -------- Storage --------
     const prefs = PreferencesManager.getExtensionPrefs("figmaToCode");
@@ -50,23 +51,61 @@ define(function (require, exports, module) {
     function setToken(v)  { prefs.set("token", (v || "").trim()); prefs.save(); }
     // Save a token then verify it against Figma (/me) so the user gets instant
     // confirmation ("Connected as …") or a clear error, instead of finding out later.
-    function saveTokenAndValidate(v) {
-        if (!v || !v.trim()) { return; }
-        setToken(v);
+    // The token is only stored AFTER Figma accepts it, so a typo or a pasted link
+    // can't silently become the saved token (that used to clear the red dot and
+    // let people continue, then fail later on Load).
+    function saveTokenAndValidate(v, after) {
+        if (ui.tokenCheck && ui.tokenCheck.status === "checking") { return; }
+        v = String(v == null ? "" : v).trim();
+        ui.tokenDraft = v;
+        const problem = checkTokenInput(v);
+        if (problem) {
+            ui.tokenCheck = { status: "err", msg: problem, field: true };
+            renderPanel(); focusTokenField();
+            return;
+        }
         ui.tokenCheck = { status: "checking" };
         renderPanel();
-        figmaGet("/me").then(function (me) {
+        figmaGet("/me", v).then(function (me) {
+            setToken(v);
+            ui.tokenDraft = "";
             ui.tokenCheck = { status: "ok", who: me.email || me.handle || "you" };
+            renderPanel();
+            if (typeof after === "function") { after(); }
         }).catch(function (err) {
-            ui.tokenCheck = { status: "err", msg: (err && err.message) || "Token check failed." };
-        }).then(function () { renderPanel(); });
+            const msg = (err && err.message) || "Token check failed.";
+            ui.tokenCheck = { status: "err", msg: /rejected your token/.test(msg)
+                ? "Figma didn't accept that token. Check you copied all of it, or create a new one."
+                : msg, field: true };
+            renderPanel(); focusTokenField();
+        });
+    }
+    function focusTokenField() {
+        setTimeout(function () { $body.find(".f2c-token-input").trigger("focus"); }, 0);
     }
     function tokenStatusHtml() {
         const c = ui.tokenCheck;
         if (!c) { return ""; }
-        if (c.status === "checking") { return '<div class="f2c-status f2c-loading">Checking token…</div>'; }
-        if (c.status === "ok") { return '<div class="f2c-status f2c-ok">✓ Connected as ' + esc(c.who) + '</div>'; }
-        return '<div class="f2c-status f2c-err">' + esc(c.msg) + '</div>';
+        if (c.status === "checking") { return '<div class="f2c-status f2c-loading" role="status"><span class="f2c-spin"></span>Checking token with Figma…</div>'; }
+        if (c.status === "ok") { return '<div class="f2c-status f2c-ok" role="status">✓ Connected as ' + esc(c.who) + '</div>'; }
+        return '<div class="f2c-status f2c-err" role="alert">' + esc(c.msg) + '</div>';
+    }
+    // Token input row shared by the tutorial and Settings, so both behave the same
+    // (Enter submits, error state, busy Save button, link to create a token).
+    function tokenRowHtml(placeholder) {
+        const c = ui.tokenCheck || {};
+        const busy = c.status === "checking";
+        const bad = c.status === "err" && c.field;
+        return '<div class="f2c-row">' +
+                '<div class="f2c-field' + (bad ? " f2c-field-err" : "") + '">' + svg("key") +
+                    '<input type="password" class="f2c-token-input" autocomplete="off" spellcheck="false"' +
+                    ' aria-label="Figma personal access token" placeholder="' + esc(placeholder) + '"' +
+                    ' value="' + esc(ui.tokenDraft || "") + '"' + (busy ? " disabled" : "") + ' />' +
+                '</div>' +
+                '<button type="button" class="f2c-btn-white f2c-save-token"' + (busy ? " disabled" : "") + '>' +
+                    (busy ? '<span class="f2c-spin f2c-spin-dark"></span>Checking' : "Save") + '</button>' +
+            '</div>' +
+            '<div class="f2c-note">No token? <button type="button" class="f2c-link" data-open-url="' + TOKEN_HELP_URL + '">Create one in Figma</button> (Settings, Security, Personal access tokens).</div>';
     }
     function isOnboarded(){ return !!prefs.get("onboarded"); }
     function setOnboarded(v){ prefs.set("onboarded", !!v); prefs.save(); }
@@ -85,7 +124,14 @@ define(function (require, exports, module) {
         fileKey: null,
         fileName: "",
         frames: [],
-        selectedId: null
+        selectedId: null,
+        urlDraft: null,     // what the user typed in the link box (survives re-renders)
+        tokenDraft: "",     // what the user typed in a token box (survives a failed check)
+        urlError: "",       // inline problem with the link box
+        needToken: false,   // Load was pressed without a saved token
+        tutError: "",       // tutorial: tried to continue without a token
+        busy: false,        // a Get code / Send to Claude run is in flight
+        loadSeq: 0          // bumps on every Load; stale responses are dropped
     };
 
     // ============================================================
@@ -100,29 +146,55 @@ define(function (require, exports, module) {
         return (String(s || "figma").toLowerCase()
             .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "figma").slice(0, 40);
     }
+    // Resolves true if the text really reached the clipboard, false otherwise,
+    // so callers never claim "copied" when it wasn't.
     function copyToClipboard(text) {
+        function legacy() {
+            const ta = document.createElement("textarea");
+            ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+            document.body.appendChild(ta); ta.select();
+            let ok = false;
+            try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+            document.body.removeChild(ta);
+            return ok;
+        }
         try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
-                return navigator.clipboard.writeText(text);
+                return navigator.clipboard.writeText(text).then(function () { return true; }, legacy);
             }
         } catch (e) { /* fall through */ }
-        const ta = document.createElement("textarea");
-        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-        document.body.appendChild(ta); ta.select();
-        try { document.execCommand("copy"); } catch (e) { /* ignore */ }
-        document.body.removeChild(ta);
-        return Promise.resolve();
+        return Promise.resolve(legacy());
     }
 
     // Figma URLs: figma.com/(file|design|proto)/<KEY>/<title>?node-id=1-2
     function parseFigmaUrl(url) {
         url = (url || "").trim();
         const keyM = url.match(/figma\.com\/(?:file|design|proto|board)\/([A-Za-z0-9]+)/);
-        const key  = keyM ? keyM[1] : null;
+        // Branch links (/design/KEY/branch/BRANCHKEY/...) must use the branch key,
+        // otherwise we silently load the main file instead of the branch.
+        const branchM = url.match(/figma\.com\/(?:file|design|proto|board)\/[A-Za-z0-9]+\/branch\/([A-Za-z0-9]+)/);
+        const key  = branchM ? branchM[1] : (keyM ? keyM[1] : null);
         let nodeId = null;
         const nm = url.match(/[?&]node-id=([^&]+)/);
         if (nm) { nodeId = decodeURIComponent(nm[1]).replace(/-/g, ":"); }
         return { key: key, nodeId: nodeId };
+    }
+    // Input checks for the panel. Return "" when OK, otherwise the message to show.
+    // Kept pure so tests can cover them (test/inputs.test.js).
+    function checkUrlInput(v) {
+        v = String(v == null ? "" : v).trim();
+        if (!v) { return "Paste a Figma frame link first."; }
+        if (!/figma\.com\//i.test(v)) { return "That isn't a Figma link. It should start with https://www.figma.com/"; }
+        if (!parseFigmaUrl(v).key) { return "That Figma link is missing the file. Use Copy link to selection on a frame."; }
+        return "";
+    }
+    function checkTokenInput(v) {
+        v = String(v == null ? "" : v).trim();
+        if (!v) { return "Paste your Figma token first, then press Save."; }
+        if (/\s/.test(v)) { return "Tokens don't contain spaces. Copy it again from Figma."; }
+        if (/figma\.com\//i.test(v)) { return "That's a Figma link, not a token. Tokens start with figd_"; }
+        if (v.length < 20) { return "That token looks too short. Copy the whole token from Figma."; }
+        return "";
     }
     function frameUrl(key, nodeId) {
         return "https://www.figma.com/design/" + key + "/frame?node-id=" +
@@ -130,8 +202,8 @@ define(function (require, exports, module) {
     }
 
     // ---- Figma REST ----
-    function figmaGet(path) {
-        const token = getToken();
+    function figmaGet(path, tokenOverride) {
+        const token = tokenOverride || getToken();
         if (!token) { return Promise.reject(new Error("No Figma token set. Open the Settings gear and paste one.")); }
         return fetch(FIGMA_API + path, { headers: { "X-Figma-Token": token } })
             .catch(function () { throw new Error("Couldn't reach Figma - check your internet connection and try again."); })
@@ -697,9 +769,9 @@ define(function (require, exports, module) {
         $panel.find('.f2c-nav-btn[data-view="settings"]').toggleClass("f2c-nav-alert", needsToken);
     }
     function statusHtml() {
-        if (ui.loading) { return '<div class="f2c-status f2c-loading">' + esc(ui.info || "Working…") + '</div>'; }
-        if (ui.error)   { return '<div class="f2c-status f2c-err">' + esc(ui.error) + '</div>'; }
-        if (ui.info)    { return '<div class="f2c-status f2c-ok">' + esc(ui.info) + '</div>'; }
+        if (ui.loading || ui.busy) { return '<div class="f2c-status f2c-loading" role="status"><span class="f2c-spin"></span>' + esc(ui.info || "Working…") + '</div>'; }
+        if (ui.error)   { return '<div class="f2c-status f2c-err" role="alert">' + esc(ui.error) + '</div>'; }
+        if (ui.info)    { return '<div class="f2c-status f2c-ok" role="status">' + esc(ui.info) + '</div>'; }
         return "";
     }
     function flash(kind, msg) {
@@ -746,35 +818,46 @@ define(function (require, exports, module) {
 
         html += '<div class="f2c-pad">';
 
-        const warn = !!ui.needTokenMsg;
-        const urlVal = warn ? "" : esc(prefs.get("lastUrl") || "");
-        const urlPh  = warn ? "please add a figma token" : "https://figma.com/design/…";
-        html += '<div class="f2c-title" style="font-size:16px;">Paste a Figma frame link</div>';
+        const urlVal = ui.urlDraft != null ? ui.urlDraft : (prefs.get("lastUrl") || "");
+        const locked = ui.loading || ui.busy;
+        html += '<div class="f2c-title f2c-title-sm">Paste a Figma frame link</div>';
         html += '<div class="f2c-sub">In Figma: right-click a frame, then <b>Copy link to selection</b>.</div>';
         html +=
-            '<div class="f2c-composer">' +
-                '<input type="text" class="f2c-url' + (warn ? " f2c-url-warn" : "") + '" placeholder="' + esc(urlPh) + '" value="' + urlVal + '" />' +
+            '<div class="f2c-composer' + (ui.urlError ? " f2c-composer-err" : "") + '">' +
+                '<input type="text" class="f2c-url" spellcheck="false" autocomplete="off" aria-label="Figma frame link"' +
+                ' placeholder="https://www.figma.com/design/…" value="' + esc(urlVal) + '"' + (locked ? " disabled" : "") + ' />' +
                 '<div class="f2c-composer-bar">' +
+                    '<span class="f2c-composer-hint">' + (urlVal.trim() ? "Press Enter to load" : "") + '</span>' +
                     '<div class="f2c-composer-spacer"></div>' +
-                    '<button type="button" class="f2c-round-btn f2c-load-btn" title="Load" aria-label="Load">' + svg("arrowup") + '</button>' +
+                    '<button type="button" class="f2c-round-btn f2c-load-btn' + (urlVal.trim() ? " f2c-round-ready" : "") + '" title="Load frames" aria-label="Load frames"' +
+                    (locked || !urlVal.trim() ? " disabled" : "") + '>' +
+                    (ui.loading ? '<span class="f2c-spin"></span>' : svg("arrowup")) + '</button>' +
                 '</div>' +
             '</div>';
+        if (ui.urlError) { html += '<div class="f2c-field-msg" role="alert">' + esc(ui.urlError) + '</div>'; }
+        if (!getToken()) {
+            // Say it up front (not only after a failed Load) that a token is needed.
+            html += '<div class="f2c-status ' + (ui.needToken ? "f2c-err" : "f2c-loading") + ' f2c-status-action"' + (ui.needToken ? ' role="alert"' : "") + '>' +
+                '<span>' + (ui.needToken ? "Add your Figma token before loading frames." : "You need a Figma token to load frames.") + '</span>' +
+                '<button type="button" class="f2c-btn-white f2c-btn-sm" data-go="settings">Add token</button></div>';
+        }
         html += statusHtml();
 
         if (ui.frames.length) {
-            html += '<div class="f2c-hint">' + esc(ui.fileName || "") + ' - click a frame, then ' + (paid ? "Send to Claude." : "Get code.") + '</div>';
-            html += '<div class="f2c-grid">';
+            html += '<div class="f2c-hint">' + esc(ui.fileName || "") + ' - pick a frame, then ' + (paid ? "Send to Claude." : "Get code.") + '</div>';
+            html += '<div class="f2c-grid' + (ui.busy ? " f2c-grid-locked" : "") + '">';
             ui.frames.forEach(function (f) {
                 const sel = (f.id === ui.selectedId) ? " f2c-selected" : "";
-                html += '<button type="button" class="f2c-frame' + sel + '" data-id="' + esc(f.id) + '">' +
+                html += '<button type="button" class="f2c-frame' + sel + '" data-id="' + esc(f.id) + '" aria-pressed="' + (sel ? "true" : "false") + '"' + (ui.busy ? " disabled" : "") + '>' +
                     (f.imgUrl ? '<img src="' + esc(f.imgUrl) + '" alt="' + esc(f.name) + '" loading="lazy" />'
-                              : '<div class="f2c-frame-ph">…</div>') +
-                    '<span class="f2c-frame-name">' + esc(f.name) + '</span>' +
+                              : '<div class="f2c-frame-ph">' + (f.imgFailed ? "No preview" : '<span class="f2c-spin"></span>') + '</div>') +
+                    '<span class="f2c-frame-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span>' +
                 '</button>';
             });
             html += '</div>';
             const label = paid ? "Send to Claude" : "Get code";
-            html += '<button type="button" class="f2c-btn-white f2c-btn-full f2c-getcode-btn" style="margin-top:14px;"' + (ui.selectedId ? "" : " disabled") + '>' + label + '</button>';
+            html += '<button type="button" class="f2c-btn-white f2c-btn-full f2c-getcode-btn"' + (ui.selectedId && !locked ? "" : " disabled") + '>' +
+                (ui.busy ? '<span class="f2c-spin f2c-spin-dark"></span>Working…' : (ui.selectedId ? label : "Pick a frame first")) + '</button>';
         }
 
         // Tip pinned to the bottom
@@ -790,39 +873,17 @@ define(function (require, exports, module) {
 
     // ---- Tutorial: single "How it works" card (clone of the reference) ----
     function tutorialData() {
-        if (getSeat() === "paid") {
-            const ptk = getToken();
-            return {
-                paid: true,
-                title: "Design to code, exactly",
-                steps: [
-                    { icon: "key",   text: "Create a Figma token in <b>Settings → Security</b>" },
-                    { icon: "link",  text: "Paste a frame link into <b>Import</b>" },
-                    { icon: "image", text: "Pick the frame you want" },
-                    { icon: "send",  text: "Hit <b>Send to Claude</b> - it builds pixel-perfect code in the AI panel" }
-                ],
-                rowLabel: "Your Figma token:",
-                row: '<div class="f2c-field">' + svg("key") +
-                     '<input type="password" class="f2c-tut-token" placeholder="' + (ptk ? "figd_ saved, paste to replace" : "figd_") + '" />' +
-                     '</div>' +
-                     '<button type="button" class="f2c-btn-white f2c-tut-save-token">Save</button>'
-            };
-        }
-        const tk = getToken();
+        const paid = getSeat() === "paid";
         return {
-            paid: false,
-            title: "Design to code, fast",
+            paid: paid,
+            title: paid ? "Design to code, exactly" : "Design to code, fast",
             steps: [
-                { icon: "key",   text: "Create a Figma token in <b>Settings → Security</b>" },
+                { icon: "key",   text: "Create a Figma token in <b>Settings → Security</b> and save it below" },
                 { icon: "link",  text: "Paste a frame link into <b>Import</b>" },
                 { icon: "image", text: "Pick the frame you want" },
-                { icon: "code",  text: "Hit <b>Get code</b>, real icons exported and file opened" }
-            ],
-            rowLabel: "Your Figma token:",
-            row: '<div class="f2c-field">' + svg("key") +
-                 '<input type="password" class="f2c-tut-token" placeholder="' + (tk ? "figd_ saved, paste to replace" : "figd_") + '" />' +
-                 '</div>' +
-                 '<button type="button" class="f2c-btn-white f2c-tut-save-token">Save</button>'
+                paid ? { icon: "send", text: "Hit <b>Send to Claude</b>, it builds pixel-perfect code in the AI panel" }
+                     : { icon: "code", text: "Hit <b>Get code</b>, real icons exported and file opened" }
+            ]
         };
     }
     function renderTutorial() {
@@ -846,18 +907,21 @@ define(function (require, exports, module) {
             return;
         }
         const d = tutorialData();
+        const has = !!getToken();
         let html = heroHtml(d.paid) + '<div class="f2c-pad">' +
             '<div class="f2c-title">' + d.title + '</div>' +
             '<div class="f2c-sub">How it works:</div>' +
             listHtml(d.steps) +
-            '<div class="f2c-label">' + d.rowLabel + '</div>' +
-            '<div class="f2c-row">' + d.row + '</div>';
+            '<div class="f2c-label">Your Figma token' + (has ? "" : ' <span class="f2c-required">required</span>') + '</div>' +
+            tokenRowHtml(has ? "Saved. Paste a new one to replace it" : "figd_…");
         if (ui.tokenCheck) {
-            html += '<div style="margin-bottom:14px;">' + tokenStatusHtml() + '</div>';
-        } else if (getToken()) {
-            html += '<div class="f2c-status f2c-ok" style="margin-bottom:14px;">Token saved. You are ready to import.</div>';
+            html += tokenStatusHtml();
+        } else if (has) {
+            html += '<div class="f2c-status f2c-ok" role="status">✓ Token saved. You are ready to import.</div>';
         }
-        html += '<button type="button" class="f2c-btn-white f2c-btn-full f2c-tut-next">Start importing</button>' +
+        if (ui.tutError && !has) { html += '<div class="f2c-field-msg" role="alert">' + esc(ui.tutError) + '</div>'; }
+        html += '<button type="button" class="f2c-btn-white f2c-btn-full f2c-tut-next f2c-mt">' +
+            (has ? "Start importing" : "Save token and start") + '</button>' +
         '</div>';
         $body.html(html);
     }
@@ -872,25 +936,25 @@ define(function (require, exports, module) {
         [1, 2, 3, 4].forEach(function (s) { opts += '<option value="' + s + '"' + (s === scale ? " selected" : "") + '>' + s + '×</option>'; });
         const seatLabel = seat === "paid" ? "🟢 Paid / Dev seat" : (seat === "free" ? "🟡 Free seat" : "Not set");
         let html = '<div class="f2c-pad">' +
-            '<div class="f2c-title" style="font-size:18px;">Settings</div>' +
+            '<div class="f2c-title f2c-title-md">Settings</div>' +
             '<div class="f2c-label">Your Figma plan</div>' +
             '<div class="f2c-row"><div class="f2c-field"><span class="f2c-field-text">' + seatLabel + '</span></div>' +
                 '<button type="button" class="f2c-btn-ghost" data-reseat="1">Change</button></div>';
 
         // Both tiers use the personal token now (paid packs the design into the
         // Claude prompt via the token - no plugin/OAuth).
-        html += '<div class="f2c-label">Figma personal access token</div>' +
-            (!token ? '<div class="f2c-warn">⚠ No figma token yet.</div>' : '') +
-            '<div class="f2c-row">' +
-                '<div class="f2c-field">' + svg("key") + '<input type="password" class="f2c-token" placeholder="' + (token ? esc(masked) : "figd_") + '" /></div>' +
-                '<button type="button" class="f2c-btn-white f2c-save-token">Save</button>' +
-            '</div>' +
-            '<div class="f2c-note">Stored only on this machine (Phoenix preferences). Never uploaded.</div>' +
-            (token ? '<div class="f2c-status f2c-ok">Token saved. <button type="button" class="f2c-link" data-test="1">Test connection</button> · <button type="button" class="f2c-link" data-clear="1">Remove</button></div>' : "") +
-            tokenStatusHtml() +
-            '<div class="f2c-test-out"></div>' +
-            '<div class="f2c-label" style="margin-top:16px;">Preview resolution</div>' +
-            '<select class="f2c-scale">' + opts + '</select>' +
+        html += '<div class="f2c-label f2c-mt">Figma personal access token' + (token ? "" : ' <span class="f2c-required">required</span>') + '</div>' +
+            tokenRowHtml(token ? masked + " (paste to replace)" : "figd_…");
+        if (ui.tokenCheck) {
+            html += tokenStatusHtml();
+        } else if (token) {
+            html += '<div class="f2c-status f2c-ok f2c-status-action" role="status"><span>✓ Token saved (' + esc(masked) + ')</span>' +
+                '<span class="f2c-status-links"><button type="button" class="f2c-link" data-test="1">Test</button>' +
+                '<button type="button" class="f2c-link" data-clear="1">Remove</button></span></div>';
+        }
+        html += '<div class="f2c-note">Stored only on this machine (Phoenix preferences). Never uploaded.</div>' +
+            '<div class="f2c-label f2c-mt">Preview resolution</div>' +
+            '<select class="f2c-scale" aria-label="Preview resolution">' + opts + '</select>' +
             '<div class="f2c-note">Higher is sharper but slower to load' + (seat === "paid" ? " (paid also sends this render to Claude)" : "") + '.</div>';
         html += '<div class="f2c-settings-footer"><button type="button" class="f2c-link" data-go="tutorial">Replay tutorial</button></div></div>';
         $body.html(html);
@@ -907,46 +971,73 @@ define(function (require, exports, module) {
     //  Actions
     // ============================================================
     async function loadUrl(url) {
-        // No token -> show "please add a figma token" right in the composer.
-        if (!getToken()) {
-            ui.needTokenMsg = true; ui.error = ""; ui.info = ""; ui.frames = []; ui.selectedId = null;
-            prefs.set("lastUrl", ""); prefs.save();
-            renderPanel();
-            return;
-        }
-        ui.needTokenMsg = false;
-        const parsed = parseFigmaUrl(url);
-        if (!parsed.key) { flash("err", "That doesn't look like a Figma link."); renderPanel(); return; }
+        if (ui.loading || ui.busy) { return; }
+        url = String(url == null ? "" : url).trim();
+        ui.urlDraft = url;
+        ui.error = ""; ui.info = "";
+        // Bad or empty link -> say so right under the box and keep what they typed.
+        const problem = checkUrlInput(url);
+        ui.urlError = problem;
+        if (problem) { ui.needToken = false; renderPanel(); focusUrl(); return; }
+        // No token -> keep the link, explain, and offer a one-click way to fix it.
+        if (!getToken()) { ui.needToken = true; renderPanel(); return; }
+        ui.needToken = false;
 
+        const parsed = parseFigmaUrl(url);
+        const seq = ++ui.loadSeq;
         prefs.set("lastUrl", url); prefs.save();
-        ui.loading = true; ui.error = ""; ui.info = "Loading…"; ui.frames = []; ui.selectedId = null;
+        ui.loading = true; ui.info = "Loading frames…"; ui.frames = []; ui.selectedId = null;
         ui.fileKey = parsed.key;
         renderPanel();
+        let frames;
         try {
             if (parsed.nodeId) {
                 const data = await figmaGet("/files/" + parsed.key + "/nodes?ids=" + encodeURIComponent(parsed.nodeId));
                 const wrap = data.nodes && data.nodes[parsed.nodeId];
                 const doc = wrap && wrap.document;
-                if (!doc) { throw new Error("Couldn't find that frame in the file."); }
+                if (!doc) { throw new Error("Couldn't find that frame in the file. It may have been deleted, or the link is from another file."); }
+                if (seq !== ui.loadSeq) { return; }
                 ui.fileName = data.name || "";
                 const box = doc.absoluteBoundingBox || {};
-                ui.frames = [{ id: doc.id, name: doc.name || doc.type, w: box.width || 0, h: box.height || 0, imgUrl: null }];
-                ui.selectedId = doc.id;
+                frames = [{ id: doc.id, name: doc.name || doc.type, w: box.width || 0, h: box.height || 0, imgUrl: null }];
             } else {
                 const data = await figmaGet("/files/" + parsed.key + "?depth=2");
+                if (seq !== ui.loadSeq) { return; }
                 ui.fileName = data.name || "";
-                ui.frames = collectFrames(data.document);
-                if (!ui.frames.length) { throw new Error("No top-level frames found in this file."); }
+                frames = collectFrames(data.document);
+                if (!frames.length) { throw new Error("No top-level frames found in this file. Link to a specific frame instead."); }
             }
-            ui.loading = false; ui.info = ""; renderPanel();
-            const ids = ui.frames.map(function (f) { return f.id; });
-            const images = await fetchImages(parsed.key, ids, getScale());
-            ui.frames.forEach(function (f) { f.imgUrl = images[f.id] || null; });
-            flash("ok", ui.frames.length === 1 ? "Frame loaded." : (ui.frames.length + " frames loaded."));
-            renderPanel();
         } catch (e) {
+            if (seq !== ui.loadSeq) { return; }
             ui.loading = false; flash("err", e.message || String(e)); renderPanel();
+            return;
         }
+        ui.frames = frames;
+        if (frames.length === 1) { ui.selectedId = frames[0].id; }
+        ui.loading = false;
+        flash("ok", frames.length === 1 ? "Frame loaded." : (frames.length + " frames loaded. Pick one."));
+        renderPanel();
+        // Thumbnails are a nice-to-have: if they fail, the frames still work.
+        try {
+            const images = await fetchImages(parsed.key, frames.map(function (f) { return f.id; }), getScale());
+            if (seq !== ui.loadSeq) { return; }
+            frames.forEach(function (f) { f.imgUrl = images[f.id] || null; f.imgFailed = !f.imgUrl; });
+        } catch (e) {
+            if (seq !== ui.loadSeq) { return; }
+            frames.forEach(function (f) { f.imgFailed = true; });
+        }
+        if (!ui.busy) { renderPanel(); }
+    }
+    function focusUrl() { setTimeout(function () { $body.find(".f2c-url").trigger("focus"); }, 0); }
+    // Settings "Test": re-check the saved token and show the result in place.
+    function testSavedToken() {
+        if (!getToken() || (ui.tokenCheck && ui.tokenCheck.status === "checking")) { return; }
+        ui.tokenCheck = { status: "checking" }; renderPanel();
+        figmaGet("/me").then(function (me) {
+            ui.tokenCheck = { status: "ok", who: me.email || me.handle || "you" };
+        }).catch(function (err) {
+            ui.tokenCheck = { status: "err", msg: (err && err.message) || "Token check failed." };
+        }).then(renderPanel);
     }
 
     // Paid path - gather the design via the personal token (no plugin/OAuth) and
@@ -991,8 +1082,8 @@ define(function (require, exports, module) {
         })(root);
         return lines;
     }
-    function buildClaudePrompt(doc, previewUrl, assetMap, fillMap) {
-        const url = frameUrl(ui.fileKey, ui.selectedId);
+    function buildClaudePrompt(doc, previewUrl, assetMap, fillMap, link) {
+        const url = link || frameUrl(ui.fileKey, ui.selectedId);
         const name = doc.name || "frame";
         const box = doc.absoluteBoundingBox || {};
         const assets = assetLines(doc, assetMap, fillMap);
@@ -1031,86 +1122,88 @@ define(function (require, exports, module) {
         ta.focus();
         return true;
     }
+    // Shared start/finish for the two long actions. Only one may run at a time,
+    // so a double click can't fire two Claude runs or two file writes.
+    function beginJob(msg) {
+        if (ui.busy || ui.loading || !ui.selectedId || !ui.fileKey) { return null; }
+        if (!getToken()) { ui.needToken = true; ui.view = "import"; renderPanel(); return null; }
+        ui.busy = true; ui.error = ""; ui.info = msg; ui.needToken = false; renderPanel();
+        // Snapshot the target: clicking another frame mid-run must not change it.
+        return { key: ui.fileKey, id: ui.selectedId };
+    }
+    function step(msg) { ui.info = msg; renderPanel(); }
+    function endJob(kind, msg) { ui.busy = false; flash(kind, msg); renderPanel(); }
+
     async function sendToClaude() {
-        if (!ui.selectedId || !ui.fileKey) { return; }
-        // Both tiers need a token now. No token -> same inline nudge as the free path.
-        if (!getToken()) {
-            ui.needTokenMsg = true; ui.error = ""; ui.info = ""; ui.view = "import"; renderPanel();
-            return;
-        }
-        ui.loading = true; ui.error = ""; ui.info = "Reading frame…"; renderPanel();
+        const job = beginJob("Reading frame…");
+        if (!job) { return; }
         try {
-            const data = await figmaGet("/files/" + ui.fileKey + "/nodes?ids=" + encodeURIComponent(ui.selectedId) + "&geometry=paths");
-            const doc = data.nodes && data.nodes[ui.selectedId] && data.nodes[ui.selectedId].document;
+            const data = await figmaGet("/files/" + job.key + "/nodes?ids=" + encodeURIComponent(job.id) + "&geometry=paths");
+            const doc = data.nodes && data.nodes[job.id] && data.nodes[job.id].document;
             if (!doc) { throw new Error("Couldn't fetch that frame's details."); }
-            ui.info = "Rendering preview…"; renderPanel();
+            step("Rendering preview…");
             let previewUrl = null;
-            try { const pm = await fetchImages(ui.fileKey, [ui.selectedId], 2); previewUrl = pm[ui.selectedId] || null; } catch (e) { previewUrl = null; }
-            ui.info = "Exporting assets…"; renderPanel();
+            try { const pm = await fetchImages(job.key, [job.id], 2); previewUrl = pm[job.id] || null; } catch (e) { previewUrl = null; }
+            step("Exporting assets…");
             const assetIds = collectAssetIds(doc);
             let assetMap = {};
-            if (assetIds.length) { try { assetMap = await fetchImages(ui.fileKey, assetIds, 2); } catch (e) { assetMap = {}; } }
+            if (assetIds.length) { try { assetMap = await fetchImages(job.key, assetIds, 2); } catch (e) { assetMap = {}; } }
             const imageRefs = collectImageRefs(doc);
             let fillMap = {};
-            if (imageRefs.length) { try { fillMap = await fetchImageFills(ui.fileKey); } catch (e) { fillMap = {}; } }
+            if (imageRefs.length) { try { fillMap = await fetchImageFills(job.key); } catch (e) { fillMap = {}; } }
 
-            const prompt = buildClaudePrompt(doc, previewUrl, assetMap, fillMap);
+            const prompt = buildClaudePrompt(doc, previewUrl, assetMap, fillMap, frameUrl(job.key, job.id));
             const filled = fillClaudeInput(prompt);
             const sendBtn = document.querySelector(".ai-send-btn");
-            ui.loading = false;
             if (filled && sendBtn) {
                 setTimeout(function () { try { sendBtn.click(); } catch (e) { /* ignore */ } }, 120);
-                flash("ok", "Sent to Claude ✓ - building accurate code in the AI panel.");
-                renderPanel();
+                endJob("ok", "Sent to Claude ✓ Building the code in the AI panel.");
                 setTimeout(closePanel, 900);
             } else {
                 // No AI panel -> copy the full prompt so the user can paste it.
-                copyToClipboard(prompt).then(function () {
-                    flash("ok", "AI panel not found - full prompt copied. Open the AI panel and paste it.");
-                    renderPanel();
-                });
+                const copied = await copyToClipboard(prompt);
+                if (copied) { endJob("ok", "AI panel not found, so the full prompt was copied. Open the AI panel and paste it."); }
+                else { endJob("err", "AI panel not found and the clipboard is blocked. Open the AI panel and try again."); }
             }
         } catch (e) {
-            ui.loading = false; flash("err", e.message || String(e)); renderPanel();
+            endJob("err", e.message || String(e));
         }
     }
 
     // Free path - export icons + generate + write.
     async function getCodeForSelected() {
-        if (!ui.selectedId || !ui.fileKey) { return; }
-        const frame = ui.frames.filter(function (f) { return f.id === ui.selectedId; })[0];
-        ui.loading = true; ui.error = ""; ui.info = "Reading frame…"; renderPanel();
+        const job = beginJob("Reading frame…");
+        if (!job) { return; }
+        const frame = ui.frames.filter(function (f) { return f.id === job.id; })[0];
         try {
-            const data = await figmaGet("/files/" + ui.fileKey + "/nodes?ids=" + encodeURIComponent(ui.selectedId) + "&geometry=paths");
-            const wrap = data.nodes && data.nodes[ui.selectedId];
+            const data = await figmaGet("/files/" + job.key + "/nodes?ids=" + encodeURIComponent(job.id) + "&geometry=paths");
+            const wrap = data.nodes && data.nodes[job.id];
             const doc  = wrap && wrap.document;
             if (!doc) { throw new Error("Couldn't fetch that frame's details."); }
 
             const assetIds = collectAssetIds(doc);
             const imageRefs = collectImageRefs(doc);
-            ui.info = "Exporting " + assetIds.length + " icons, " + imageRefs.length + " images…"; renderPanel();
+            step("Exporting " + assetIds.length + " icons, " + imageRefs.length + " images…");
             let assetMap = {};
             if (assetIds.length) {
-                try { assetMap = await fetchImages(ui.fileKey, assetIds, 2); } catch (e) { assetMap = {}; }
+                try { assetMap = await fetchImages(job.key, assetIds, 2); } catch (e) { assetMap = {}; }
             }
             let imageFillMap = {};
             if (imageRefs.length) {
-                try { imageFillMap = await fetchImageFills(ui.fileKey); } catch (e) { imageFillMap = {}; }
+                try { imageFillMap = await fetchImageFills(job.key); } catch (e) { imageFillMap = {}; }
             }
-            ui.info = "Generating…"; renderPanel();
+            step("Generating…");
             const tokens = collectTokens(doc, (wrap && wrap.styles) || {});
             const htmlDoc = generateFromNode(doc, assetMap, imageFillMap, tokens);
             const fileName = "figma-" + safeName(frame ? frame.name : doc.name) + ".html";
             await writeAndOpen(fileName, htmlDoc);
-            ui.loading = false;
             const gotIcons = Object.keys(assetMap).length;
             const gotImages = imageRefs.filter(function (r) { return imageFillMap[r]; }).length;
             const gotTokens = tokens.defs.length;
             const capNote = assetIds.length >= MAX_ASSETS ? " (hit the " + MAX_ASSETS + "-icon cap, some may be missing)" : "";
-            flash("ok", "Wrote " + fileName + " (" + gotIcons + " icons, " + gotImages + " images" + (gotTokens ? ", " + gotTokens + " color tokens" : "") + ")" + capNote + " - turn on Live Preview.");
-            renderPanel();
+            endJob("ok", "Wrote " + fileName + " (" + gotIcons + " icons, " + gotImages + " images" + (gotTokens ? ", " + gotTokens + " color tokens" : "") + ")" + capNote + ". Turn on Live Preview to see it.");
         } catch (e) {
-            ui.loading = false; flash("err", e.message || String(e)); renderPanel();
+            endJob("err", e.message || String(e));
         }
     }
 
@@ -1118,22 +1211,25 @@ define(function (require, exports, module) {
     $panel.on("click", ".f2c-nav-btn", function () {
         const v = $(this).attr("data-view");
         if (v === "tutorial") { ui.step = 0; }
+        leaveView();
         setView(v);
     });
+    // Switching views drops stale token messages / drafts from the previous view.
+    function leaveView() {
+        if (!(ui.tokenCheck && ui.tokenCheck.status === "checking")) { ui.tokenCheck = null; ui.tokenDraft = ""; }
+        ui.tutError = "";
+    }
 
     $body.on("click", function (e) {
         const $t = $(e.target);
+        if ($t.closest("button[disabled]").length) { return; }
 
         const go = $t.closest("[data-go]").attr("data-go");
-        if (go) { if (go === "tutorial") { ui.step = 0; } setView(go); return; }
+        if (go) { if (go === "tutorial") { ui.step = 0; } leaveView(); setView(go); if (go === "settings") { focusTokenField(); } return; }
 
-        // generic copy buttons (install cmd, etc.)
-        const $copy = $t.closest("[data-copy]");
-        if ($copy.length) {
-            copyToClipboard($copy.attr("data-copy"));
-            $copy.text("Copied ✓");
-            return;
-        }
+        // external help links open in the system browser
+        const openUrl = $t.closest("[data-open-url]").attr("data-open-url");
+        if (openUrl) { openExternal(openUrl); return; }
 
         // seat toggle (Import view + inline suggestion link)
         const $ss = $t.closest("[data-setseat]");
@@ -1142,61 +1238,84 @@ define(function (require, exports, module) {
         // seat choice (tutorial)
         const $seat = $t.closest("[data-seat]");
         if ($seat.length) { setSeat($seat.attr("data-seat")); ui.step = 0; renderPanel(); return; }
-        if ($t.closest("[data-reseat], .f2c-tut-reseat").length) { setSeat(""); ui.view = "tutorial"; ui.step = 0; renderPanel(); return; }
+        if ($t.closest("[data-reseat]").length) { setSeat(""); ui.view = "tutorial"; ui.step = 0; leaveView(); renderPanel(); return; }
 
-        // import: URL chip focuses the input
-        if ($t.closest(".f2c-focus-url").length) { $body.find(".f2c-url").trigger("focus"); return; }
-        // import: Quick = paste from clipboard and load in one go
-        if ($t.closest(".f2c-quick-btn").length) {
-            if (navigator.clipboard && navigator.clipboard.readText) {
-                navigator.clipboard.readText().then(function (txt) {
-                    txt = (txt || "").trim();
-                    if (txt) { $body.find(".f2c-url").val(txt); loadUrl(txt); }
-                }).catch(function () {});
-            }
-            return;
-        }
         // import: send (arrow) loads the current input
         if ($t.closest(".f2c-load-btn").length) { loadUrl($body.find(".f2c-url").val()); return; }
         const $frame = $t.closest(".f2c-frame");
-        if ($frame.length) { ui.selectedId = $frame.attr("data-id"); renderPanel(); return; }
+        if ($frame.length) {
+            if (ui.busy) { return; }
+            ui.selectedId = $frame.attr("data-id"); if (!ui.loading) { ui.error = ""; ui.info = ""; }
+            renderPanel(); return;
+        }
         if ($t.closest(".f2c-getcode-btn").length) {
             if (getSeat() === "paid") { sendToClaude(); } else { getCodeForSelected(); }
             return;
         }
 
-        // tutorial: inline token save
-        if ($t.closest(".f2c-tut-save-token").length) {
-            saveTokenAndValidate($body.find(".f2c-tut-token").val());
+        // token Save (tutorial + settings share the same row)
+        if ($t.closest(".f2c-save-token").length) {
+            saveTokenAndValidate($body.find(".f2c-token-input").val());
             return;
         }
 
-        // tutorial: finish -> go to Import
+        // tutorial: finish -> go to Import. Requires a saved token; if one is
+        // typed but not saved yet, save+check it first and continue on success.
         if ($t.closest(".f2c-tut-next").length) {
-            setOnboarded(true); setView("import"); return;
+            if (getToken()) { finishTutorial(); return; }
+            const typed = String($body.find(".f2c-token-input").val() || "").trim();
+            if (typed) { ui.tutError = ""; saveTokenAndValidate(typed, finishTutorial); return; }
+            ui.tutError = "Save your Figma token to continue. Every import needs it.";
+            ui.tokenCheck = null;
+            renderPanel(); focusTokenField();
+            return;
         }
 
         // settings
-        if ($t.closest(".f2c-save-token").length) {
-            saveTokenAndValidate($body.find(".f2c-token").val());
-            return;
+        if ($t.closest("[data-clear]").length) {
+            setToken(""); ui.tokenCheck = null; ui.tokenDraft = ""; ui.frames = []; ui.selectedId = null;
+            renderPanel(); focusTokenField(); return;
         }
-        if ($t.closest("[data-clear]").length) { setToken(""); ui.tokenCheck = null; renderPanel(); return; }
-        if ($t.closest("[data-test]").length) {
-            const $out = $body.find(".f2c-test-out");
-            $out.html('<div class="f2c-status f2c-loading">Testing…</div>');
-            figmaGet("/me").then(function (me) {
-                $out.html('<div class="f2c-status f2c-ok">Connected as ' + esc(me.handle || me.email || "you") + '.</div>');
-            }).catch(function (err) { $out.html('<div class="f2c-status f2c-err">' + esc(err.message) + '</div>'); });
-            return;
-        }
+        if ($t.closest("[data-test]").length) { testSavedToken(); return; }
     });
+    function finishTutorial() { setOnboarded(true); ui.tutError = ""; ui.tokenCheck = null; setView("import"); }
+    function openExternal(url) {
+        try {
+            const NativeApp = brackets.getModule("utils/NativeApp");
+            if (NativeApp && NativeApp.openURLInDefaultBrowser) { NativeApp.openURLInDefaultBrowser(url); return; }
+        } catch (e) { /* fall through */ }
+        window.open(url, "_blank", "noopener");
+    }
 
     $body.on("keydown", ".f2c-url", function (e) { if (e.key === "Enter") { e.preventDefault(); loadUrl($(this).val()); } });
+    $body.on("keydown", ".f2c-token-input", function (e) {
+        if (e.key !== "Enter") { return; }
+        e.preventDefault();
+        // In the tutorial, Enter behaves like "Save token and start".
+        if (ui.view === "tutorial" && !getToken()) { saveTokenAndValidate($(this).val(), finishTutorial); }
+        else { saveTokenAndValidate($(this).val()); }
+    });
+    // Live feedback while typing, without a full re-render (keeps focus/caret).
     $body.on("input", ".f2c-url", function () {
-        if (ui.needTokenMsg) {
-            ui.needTokenMsg = false;
-            $(this).removeClass("f2c-url-warn").attr("placeholder", "https://figma.com/design/…");
+        const v = String($(this).val() || "");
+        ui.urlDraft = v;
+        const has = !!v.trim();
+        $body.find(".f2c-load-btn").prop("disabled", !has || ui.loading || ui.busy).toggleClass("f2c-round-ready", has);
+        $body.find(".f2c-composer-hint").text(has ? "Press Enter to load" : "");
+        if (ui.urlError || ui.needToken) {
+            ui.urlError = ""; ui.needToken = false;
+            $body.find(".f2c-composer").removeClass("f2c-composer-err");
+            $body.find(".f2c-field-msg").remove();
+            $body.find(".f2c-status-action").removeClass("f2c-err").addClass("f2c-loading").removeAttr("role")
+                .find("span").first().text("You need a Figma token to load frames.");
+        }
+    });
+    $body.on("input", ".f2c-token-input", function () {
+        ui.tokenDraft = String($(this).val() || "");
+        if (ui.tokenCheck && ui.tokenCheck.status === "err") {
+            ui.tokenCheck = null;
+            $(this).closest(".f2c-field").removeClass("f2c-field-err");
+            $body.find(".f2c-status.f2c-err").remove();
         }
     });
     $body.on("change", ".f2c-scale", function () { setScale($(this).val()); });
