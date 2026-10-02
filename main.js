@@ -68,7 +68,7 @@ define(function (require, exports, module) {
         renderPanel();
         figmaGet("/me", v).then(function (me) {
             setToken(v);
-            ui.tokenDraft = "";
+            ui.tokenDraft = ""; ui.tokenBad = false;
             ui.tokenCheck = { status: "ok", who: me.email || me.handle || "you" };
             renderPanel();
             if (typeof after === "function") { after(); }
@@ -95,7 +95,7 @@ define(function (require, exports, module) {
     function tokenRowHtml(placeholder) {
         const c = ui.tokenCheck || {};
         const busy = c.status === "checking";
-        const bad = c.status === "err" && c.field;
+        const bad = (c.status === "err" && c.field) || (ui.view === "tutorial" && !!ui.tutError);
         return '<div class="f2c-row">' +
                 '<div class="f2c-field' + (bad ? " f2c-field-err" : "") + '">' + svg("key") +
                     '<input type="password" class="f2c-token-input" autocomplete="off" spellcheck="false"' +
@@ -129,6 +129,7 @@ define(function (require, exports, module) {
         tokenDraft: "",     // what the user typed in a token box (survives a failed check)
         urlError: "",       // inline problem with the link box
         needToken: false,   // Load was pressed without a saved token
+        tokenBad: false,    // Figma rejected the SAVED token (expired / revoked)
         tutError: "",       // tutorial: tried to continue without a token
         busy: false,        // a Get code / Send to Claude run is in flight
         loadSeq: 0          // bumps on every Load; stale responses are dropped
@@ -765,7 +766,7 @@ define(function (require, exports, module) {
             $(this).toggleClass("f2c-nav-active", $(this).attr("data-view") === ui.view);
         });
         // Red dot on the settings gear when a token is missing (both tiers need one now).
-        const needsToken = !getToken();
+        const needsToken = !getToken() || !!ui.tokenBad;
         $panel.find('.f2c-nav-btn[data-view="settings"]').toggleClass("f2c-nav-alert", needsToken);
     }
     function statusHtml() {
@@ -835,7 +836,11 @@ define(function (require, exports, module) {
                 '</div>' +
             '</div>';
         if (ui.urlError) { html += '<div class="f2c-field-msg" role="alert">' + esc(ui.urlError) + '</div>'; }
-        if (!getToken()) {
+        if (getToken() && ui.tokenBad) {
+            html += '<div class="f2c-status f2c-err f2c-status-action" role="alert">' +
+                '<span>Your saved Figma token no longer works.</span>' +
+                '<button type="button" class="f2c-btn-white f2c-btn-sm" data-go="settings">Replace token</button></div>';
+        } else if (!getToken()) {
             // Say it up front (not only after a failed Load) that a token is needed.
             html += '<div class="f2c-status ' + (ui.needToken ? "f2c-err" : "f2c-loading") + ' f2c-status-action"' + (ui.needToken ? ' role="alert"' : "") + '>' +
                 '<span>' + (ui.needToken ? "Add your Figma token before loading frames." : "You need a Figma token to load frames.") + '</span>' +
@@ -916,6 +921,8 @@ define(function (require, exports, module) {
             tokenRowHtml(has ? "Saved. Paste a new one to replace it" : "figd_…");
         if (ui.tokenCheck) {
             html += tokenStatusHtml();
+        } else if (has && ui.tokenBad) {
+            html += '<div class="f2c-status f2c-err" role="alert">Your saved token no longer works. Paste a new one above.</div>';
         } else if (has) {
             html += '<div class="f2c-status f2c-ok" role="status">✓ Token saved. You are ready to import.</div>';
         }
@@ -947,6 +954,9 @@ define(function (require, exports, module) {
             tokenRowHtml(token ? masked + " (paste to replace)" : "figd_…");
         if (ui.tokenCheck) {
             html += tokenStatusHtml();
+        } else if (token && ui.tokenBad) {
+            html += '<div class="f2c-status f2c-err f2c-status-action" role="alert"><span>This token no longer works (expired or revoked). Paste a new one above.</span>' +
+                '<span class="f2c-status-links"><button type="button" class="f2c-link" data-clear="1">Remove</button></span></div>';
         } else if (token) {
             html += '<div class="f2c-status f2c-ok f2c-status-action" role="status"><span>✓ Token saved (' + esc(masked) + ')</span>' +
                 '<span class="f2c-status-links"><button type="button" class="f2c-link" data-test="1">Test</button>' +
@@ -1008,8 +1018,9 @@ define(function (require, exports, module) {
                 if (!frames.length) { throw new Error("No top-level frames found in this file. Link to a specific frame instead."); }
             }
         } catch (e) {
+            const why = await explainError(e);
             if (seq !== ui.loadSeq) { return; }
-            ui.loading = false; flash("err", e.message || String(e)); renderPanel();
+            ui.loading = false; flash("err", why); renderPanel();
             return;
         }
         ui.frames = frames;
@@ -1028,15 +1039,35 @@ define(function (require, exports, module) {
         }
         if (!ui.busy) { renderPanel(); }
     }
+    // A 401/403 can mean "token is dead" OR "token is fine but can't open this
+    // file". Ask /me once to tell them apart, so the message points at the real fix
+    // (and a dead token stops showing as "saved, ready").
+    async function explainError(e) {
+        const msg = (e && e.message) || String(e);
+        if (!/rejected your token/.test(msg)) { return msg; }
+        try {
+            await figmaGet("/me");
+            return "Your token works, but it can't open this file. Check the file is shared with your Figma account.";
+        } catch (e2) {
+            if (/rejected your token/.test((e2 && e2.message) || "")) {
+                ui.tokenBad = true;
+                return ""; // the "Replace token" banner already says it, with the fix button
+            }
+            return msg;
+        }
+    }
     function focusUrl() { setTimeout(function () { $body.find(".f2c-url").trigger("focus"); }, 0); }
     // Settings "Test": re-check the saved token and show the result in place.
     function testSavedToken() {
         if (!getToken() || (ui.tokenCheck && ui.tokenCheck.status === "checking")) { return; }
         ui.tokenCheck = { status: "checking" }; renderPanel();
         figmaGet("/me").then(function (me) {
+            ui.tokenBad = false;
             ui.tokenCheck = { status: "ok", who: me.email || me.handle || "you" };
         }).catch(function (err) {
-            ui.tokenCheck = { status: "err", msg: (err && err.message) || "Token check failed." };
+            const m = (err && err.message) || "Token check failed.";
+            if (/rejected your token/.test(m)) { ui.tokenBad = true; }
+            ui.tokenCheck = { status: "err", msg: ui.tokenBad ? "Figma no longer accepts this token (expired or revoked). Paste a new one above." : m };
         }).then(renderPanel);
     }
 
@@ -1166,7 +1197,7 @@ define(function (require, exports, module) {
                 else { endJob("err", "AI panel not found and the clipboard is blocked. Open the AI panel and try again."); }
             }
         } catch (e) {
-            endJob("err", e.message || String(e));
+            endJob("err", await explainError(e));
         }
     }
 
@@ -1203,7 +1234,7 @@ define(function (require, exports, module) {
             const capNote = assetIds.length >= MAX_ASSETS ? " (hit the " + MAX_ASSETS + "-icon cap, some may be missing)" : "";
             endJob("ok", "Wrote " + fileName + " (" + gotIcons + " icons, " + gotImages + " images" + (gotTokens ? ", " + gotTokens + " color tokens" : "") + ")" + capNote + ". Turn on Live Preview to see it.");
         } catch (e) {
-            endJob("err", e.message || String(e));
+            endJob("err", await explainError(e));
         }
     }
 
@@ -1273,7 +1304,7 @@ define(function (require, exports, module) {
 
         // settings
         if ($t.closest("[data-clear]").length) {
-            setToken(""); ui.tokenCheck = null; ui.tokenDraft = ""; ui.frames = []; ui.selectedId = null;
+            setToken(""); ui.tokenCheck = null; ui.tokenDraft = ""; ui.tokenBad = false; ui.frames = []; ui.selectedId = null;
             renderPanel(); focusTokenField(); return;
         }
         if ($t.closest("[data-test]").length) { testSavedToken(); return; }
