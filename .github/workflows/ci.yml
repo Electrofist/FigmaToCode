@@ -25,6 +25,9 @@ jobs:
       - name: Design-token tests
         run: node test/tokens.test.js
 
+      - name: Panel input checks (empty/invalid token + link)
+        run: node test/inputs.test.js
+
       - name: Error-path + crafted-response tests
         run: node test/errors.test.js
 

@@ -256,8 +256,63 @@ web_accessible_resources, chrome.runtime/sender.id, remote code) are N/A.
   the panel Settings gear (writes to prefs); a session reads it from
   `PreferencesManager` without it touching the transcript.
 
+## 9a. The one-screen redesign was REJECTED (keep this in mind)
+A full single-screen rebuild (input that morphs token->link, dense row list,
+drawer settings, orange accent) was built, verified and then rolled back at the
+user's request: "too much salt ruins the dish, you changed everything". The
+shell (header, tabs, hero, composer card, Settings view) must stay. Only these
+were kept from it: paste = load (debounced auto-load in the `.f2c-url` input
+handler), a `figd_` paste in the link box saves a token, the `.f2c-progress`
+line (`f2c-is-busy` on the panel), the single-frame `.f2c-one` preview, and
+Cmd/Ctrl+Enter. The rejected version is commit `eefc612` on `ux-hardening`
+for reference only. Do not reintroduce it without being asked.
+- Hot-swap gotcha: the installed extension's OLD stylesheet stays loaded in the
+  page; disable `link[href*="FigmaToCode"]` before judging a screenshot.
+- Testing without a token: shim `getToken/setToken` to a `window.__f2cTok`
+  variable in the hot-swap (a plain mock `/me` + real `setToken` once clobbered
+  the saved pref). Thumbnails are `<img>`, so a mock must return `data:` URLs
+  for `scale=1`; downloads go through `fetch`, serve those from a fake host.
+
+## 9b. 1.0.7 UX pass (earlier in the same branch)
+See CHANGELOG "Unreleased - 1.0.7 UX pass" for the user-facing list. Architecture
+changes to know about:
+- **No seat model.** `prefs.seat` is defined but ignored. Actions are
+  `quickConvert()` and `buildWithAi()`; `prefs.lastAction` picks the primary button.
+- **`gatherFrame(job, {preview})`** does the shared work: fetch node, export icons
+  (`collectAssetIds`) + image fills (`collectImageRefs`), optionally render the
+  design PNG at `prefs.scale`, then `downloadAssets()` copies everything into
+  `<project>/<outDir>/assets/<slug>/` with `File.write(buf, {encoding: "byte_array"})`.
+  It returns two map pairs: `assetMap/fillMap` (paths relative to the HTML, for the
+  generator) and `promptAssets/promptFills` (project-relative, for the prompt).
+  Failed downloads fall back to the Figma URL.
+- **Overwrite policy** lives in `quickConvert()`: `fileExists` -> `ui.confirm` card
+  -> `resolveConfirm("replace"|"keep-both"|"cancel")` -> `finishConvert`.
+  `freePath()` finds `name-2.html` etc.
+- **`buildClaudePrompt(doc, previewPath, assetMap, fillMap, link, outRel)`** - 6th
+  arg is the target file. `fillClaudeInput` fills the AI textarea; nothing clicks
+  `.ai-send-btn` any more. `showAiPanel()` activates the sidebar AI tab.
+- **`loadUrl(url, force)`**: `&depth=3` on both node and file fetches; CANVAS /
+  SECTION links list their frames; TEXT/VECTOR/etc. links fall back to the file's
+  frames with a notice; same URL twice is a no-op unless `force` (Reload link).
+  `collectFrames` returns `.total` and `.page` per frame.
+- **Panel**: `role=dialog`; `renderPanel()` restores focus by `data-id` /
+  `data-action` / class; `.f2c-live` is the aria-live region (`announce()`);
+  outside-click ignored while `ui.busy || ui.loading || ui.confirm`; Escape only
+  when focus is inside; `positionPanel()` runs AFTER render. `PANEL_WIDTH` must
+  match `.f2c-panel { width }` in CSS (384).
+- **Light theme**: `.f2c-panel[data-f2c-theme="light"]` overrides the zinc vars.
+  Phoenix styles `select` with `!important`, so ours do too.
+- **Testing without a working token**: install a `window.fetch` mock for
+  `https://api.figma.com/v1/*` and serve images from a fake host that returns
+  `new Response(bytes, {headers: {"content-type": "image/png"}})` (a `data:` URL
+  does NOT fetch in Phoenix's WebKit). Set `prefs.outDir` to a throwaway folder.
+- Rule kept: **never auto-submit the AI composer in tests**; the 1.0.7 code never
+  submits at all.
+
 ## 10. Current state + pending (read carefully)
-- **`main`** = published **v1.0.4** (tag `V.06`), live in the store. Adds the
+- **`ux-hardening`** = CURRENT work branch (1.0.7 UX pass, see 9b). Not pushed.
+- **`main`** = published **v1.0.6** in the store.
+- (older) **`main`** = published **v1.0.4** (tag `V.06`), live in the store. Adds the
   token-based paid path, security hardening, UI fixes, and the test suite (§4).
 - **`design-tokens`** = CURRENT work branch off `main`. Adds design tokens
   (color styles -> CSS custom properties, §4) + the errors/perf/snapshot tests +
