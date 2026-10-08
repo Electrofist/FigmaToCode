@@ -256,39 +256,22 @@ web_accessible_resources, chrome.runtime/sender.id, remote code) are N/A.
   the panel Settings gear (writes to prefs); a session reads it from
   `PreferencesManager` without it touching the transcript.
 
-## 9a. 1.0.7 redesign (branch `ux-hardening`, unreleased) - READ THIS
-The panel UI was rebuilt as ONE screen after the user rejected the old look
-("looks dated, too much going on, flow is wrong"). Old look = anti-reference.
-- DOM (`$panel`): `.f2c-progress` (top line) / `.f2c-top` (icon + `.f2c-input` +
-  gear) / `.f2c-under` (one line: error > token msg > notice > hint) /
-  `.f2c-drawer` (settings) / `.f2c-body` (frames) / `.f2c-foot` (result or
-  confirm + mode switch + ONE button) / `.f2c-live` (aria-live).
-- `renderPanel()` = `renderTop` + `renderUnder` + `renderDrawer` + `renderBody`
-  + `renderFoot`. **`renderTop` never writes the input's value** except when
-  `inputMode()` flips ("token" <-> "link", tracked in `ui.inputModeShown`), so
-  typing is never disturbed. Everything else is rebuilt with `.html()` and
-  focus is restored by `data-id` / `data-action` / `data-mode` / first `f2c-` class.
-- `inputMode()` is "token" while `!getToken() || ui.tokenBad`. `submitInput()`
-  routes Enter/paste: token mode -> `saveTokenAndValidate`; link mode -> a
-  `figd_` paste saves a token, otherwise `loadUrl`. Auto-load is debounced 160ms
-  in the `input` handler when `checkUrlInput(v) === ""`.
-- Mode = `prefs.lastAction` ("convert" | "ai"); `getMode()`; the segmented
-  switch sets it; the single `.f2c-go` button carries `data-action` = mode.
-- No views, no onboarding flag in use (`prefs.onboarded` is legacy). No
-  `hero.jpg` in CSS any more (still shipped in the zip; harmless).
-- Visual tokens are CSS vars on `.f2c-panel` (`--bg..--bg4`, `--line`, `--fg..`,
-  `--accent`) with a `[data-f2c-theme="light"]` override. Phoenix forces
-  `font-family: SourceSansPro` and `line-height: 18px` on form controls, so the
-  panel resets `font-family: inherit` on button/input/select. `<select>` colors
-  are literals (WebKit var()+!important staleness, see CSS comment).
-- **Hot-swap gotcha:** the installed extension's OLD stylesheet stays loaded in
-  the page and shares class names (`.f2c-list`, `.f2c-row`). Disable it before
-  judging a screenshot: find `link[href*="FigmaToCode"]` and set `.disabled`.
-- **Testing without a token:** shim `getToken/setToken` to a `window.__f2cTok`
+## 9a. The one-screen redesign was REJECTED (keep this in mind)
+A full single-screen rebuild (input that morphs token->link, dense row list,
+drawer settings, orange accent) was built, verified and then rolled back at the
+user's request: "too much salt ruins the dish, you changed everything". The
+shell (header, tabs, hero, composer card, Settings view) must stay. Only these
+were kept from it: paste = load (debounced auto-load in the `.f2c-url` input
+handler), a `figd_` paste in the link box saves a token, the `.f2c-progress`
+line (`f2c-is-busy` on the panel), the single-frame `.f2c-one` preview, and
+Cmd/Ctrl+Enter. The rejected version is commit `eefc612` on `ux-hardening`
+for reference only. Do not reintroduce it without being asked.
+- Hot-swap gotcha: the installed extension's OLD stylesheet stays loaded in the
+  page; disable `link[href*="FigmaToCode"]` before judging a screenshot.
+- Testing without a token: shim `getToken/setToken` to a `window.__f2cTok`
   variable in the hot-swap (a plain mock `/me` + real `setToken` once clobbered
-  the saved pref with a fake token). Thumbnails are `<img>`, so a mock must
-  return `data:` URLs for `scale=1` renders; downloads go through `fetch`, so
-  serve those from a fake host with `new Response(bytes, {headers})`.
+  the saved pref). Thumbnails are `<img>`, so a mock must return `data:` URLs
+  for `scale=1`; downloads go through `fetch`, serve those from a fake host.
 
 ## 9b. 1.0.7 UX pass (earlier in the same branch)
 See CHANGELOG "Unreleased - 1.0.7 UX pass" for the user-facing list. Architecture

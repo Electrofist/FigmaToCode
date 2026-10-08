@@ -2,24 +2,12 @@
 
 All notable changes to FigmaToCode. Versions map to phcode store releases.
 
-## [Unreleased] - 1.0.7 redesign
+## [Unreleased] - 1.0.7 UX pass
 ### Changed
-- **One screen.** The panel is now a single 440px palette: an input on top, the
-  frames in the middle, one action at the bottom. No welcome screen, no tabs,
-  no hero image. Settings (token, output folder, AI image size) live in a
-  drawer behind the gear.
-- **The input asks for what it needs.** First run it asks for the Figma token;
-  once saved it becomes the link box. Pasting a token into the link box saves
-  it; pasting a link into the token box says so.
-- **Paste = load.** A valid link loads on its own, no button to press.
-- **One button.** "Convert" writes HTML/CSS locally; a small Local / AI switch
-  next to it turns the same button into "Send to AI". Cmd/Ctrl+Enter runs it.
-- **Frames as a list** (thumbnail, name, page, size) with a filter for big
-  files, or one large preview when the link points at a single frame.
-- **Progress is a thin line** across the top; the result is one line above the
-  button ("Wrote figma/home.html · Preview · Files").
-- Near-black surface with a single orange accent; follows the editor's light or
-  dark theme. The 1.0.6 hero image and its 80 KB data URI are gone.
+- **Paste = load.** A valid link loads on its own; Enter and the arrow still
+  work. A token pasted into the link box is saved instead of rejected. A thin
+  progress line runs along the top while anything is working. A link to one
+  frame shows one large preview. Cmd/Ctrl+Enter runs the main button.
 - **One flow, two actions.** The "Free seat / Paid seat" question is gone (both
   paths always used the same personal token). Import now offers **Quick convert**
   (local, instant, approximate) and **Build with AI** (Phoenix AI panel, slower,
