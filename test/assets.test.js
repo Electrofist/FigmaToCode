@@ -32,7 +32,6 @@ if (relativeImages.length) { console.error("    offending: " + relativeImages.jo
 
 // The two brand images must actually be embedded.
 check("toolbar/brand logo is embedded (data:image/png)", /url\(["']?data:image\/png;base64,/.test(css));
-check("tutorial hero is embedded (data:image/jpeg)", /url\(["']?data:image\/jpe?g;base64,/.test(css));
 
 console.log("\n" + passed + " passed, " + failed + " failed");
 process.exit(failed ? 1 : 0);

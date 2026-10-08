@@ -30,7 +30,7 @@ define(function (require, exports, module) {
     ExtensionUtils.loadStyleSheet(module, "style.css");
 
     // -------- Constants --------
-    const PANEL_WIDTH  = 384;   // keep in sync with .f2c-panel width in style.css
+    const PANEL_WIDTH  = 440;   // keep in sync with .f2c-panel width in style.css
     const PANEL_GAP    = 8;
     const FIGMA_API    = "https://api.figma.com/v1";
     const MAX_FRAMES   = 40;
@@ -51,11 +51,8 @@ define(function (require, exports, module) {
 
     function getToken()   { return (prefs.get("token") || "").trim(); }
     function setToken(v)  { prefs.set("token", (v || "").trim()); prefs.save(); }
-    // Save a token then verify it against Figma (/me) so the user gets instant
-    // confirmation ("Connected as …") or a clear error, instead of finding out later.
     // The token is only stored AFTER Figma accepts it, so a typo or a pasted link
-    // can't silently become the saved token (that used to clear the red dot and
-    // let people continue, then fail later on Load).
+    // can't silently become the saved token.
     function saveTokenAndValidate(v, after) {
         if (ui.tokenCheck && ui.tokenCheck.status === "checking") { return; }
         v = String(v == null ? "" : v).trim();
@@ -81,33 +78,6 @@ define(function (require, exports, module) {
                 : msg, field: true };
             renderPanel(); focusTokenField();
         });
-    }
-    function focusTokenField() {
-        setTimeout(function () { $body.find(".f2c-token-input").trigger("focus"); }, 0);
-    }
-    function tokenStatusHtml() {
-        const c = ui.tokenCheck;
-        if (!c) { return ""; }
-        if (c.status === "checking") { return '<div class="f2c-status f2c-loading" role="status"><span class="f2c-spin"></span>Checking token with Figma…</div>'; }
-        if (c.status === "ok") { return '<div class="f2c-status f2c-ok" role="status">✓ Connected as ' + esc(c.who) + '</div>'; }
-        return '<div class="f2c-status f2c-err" role="alert">' + esc(c.msg) + '</div>';
-    }
-    // Token input row shared by the tutorial and Settings, so both behave the same
-    // (Enter submits, error state, busy Save button, link to create a token).
-    function tokenRowHtml(placeholder) {
-        const c = ui.tokenCheck || {};
-        const busy = c.status === "checking";
-        const bad = (c.status === "err" && c.field) || (ui.view === "guide" && !!ui.tutError);
-        return '<div class="f2c-row">' +
-                '<div class="f2c-field' + (bad ? " f2c-field-err" : "") + '">' + svg("key") +
-                    '<input type="password" class="f2c-token-input" autocomplete="off" spellcheck="false"' +
-                    ' aria-label="Figma personal access token" placeholder="' + esc(placeholder) + '"' +
-                    ' value="' + esc(ui.tokenDraft || "") + '"' + (busy ? " disabled" : "") + ' />' +
-                '</div>' +
-                '<button type="button" class="f2c-btn-white f2c-save-token"' + (busy ? " disabled" : "") + '>' +
-                    (busy ? '<span class="f2c-spin f2c-spin-dark"></span>Checking' : "Save") + '</button>' +
-            '</div>' +
-            '<div class="f2c-note">No token? In Figma open Settings, Security, Personal access tokens and create one with <b>File content: read</b>. <button type="button" class="f2c-link" data-open-url="' + TOKEN_HELP_URL + '">Show me how</button></div>';
     }
     function isOnboarded(){ return !!prefs.get("onboarded"); }
     function setOnboarded(v){ prefs.set("onboarded", !!v); prefs.save(); }
@@ -137,7 +107,11 @@ define(function (require, exports, module) {
         frameTotal: 0,      // frames in the file (we show at most MAX_FRAMES)
         filter: "",         // frame-name filter text
         confirm: null,      // pending "file exists: Replace / Keep both"
-        result: null        // last successful job (persistent card with next steps)
+        result: null,       // last successful job (persistent card with next steps)
+        drawer: false,      // settings drawer open
+        inputModeShown: null, // "token" | "link" currently shown in the top input
+        loadedUrl: "",
+        pages: 1
     };
 
     // ============================================================
@@ -846,291 +820,249 @@ define(function (require, exports, module) {
     }
 
     // ============================================================
-    //  Panel DOM
+    //  Panel DOM - one screen. Input on top asks for whatever is
+    //  needed next (token, then link); frames in the middle; one
+    //  action at the bottom. Settings live in a drawer under the gear.
     // ============================================================
+    const ICONS = {
+        link:  '<path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+        key:   '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.5 12.5 20 3"/><path d="M16 7l3 3"/>',
+        check: '<path d="M20 6 9 17l-5-5"/>',
+        search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+        gear:  '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+        close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        ext:   '<path d="M14 3h7v7"/><path d="M21 3 10 14"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/>'
+    };
+    function svg(key) { return '<svg viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[key] || "") + '</svg>'; }
+
     const $panel = $(
         '<div id="f2c-panel" class="f2c-panel" role="dialog" aria-label="Figma to Code" style="display:none;">' +
-            '<div class="f2c-header">' +
-                '<div class="f2c-brand">' +
-                    '<span class="f2c-logo"></span>' +
-                    '<span>Figma → Code</span>' +
-                '</div>' +
-                '<div class="f2c-nav" role="tablist">' +
-                    '<button type="button" class="f2c-nav-btn" data-view="import" title="Import">Import</button>' +
-                    '<button type="button" class="f2c-nav-btn f2c-nav-icon" data-view="guide" title="How it works" aria-label="How it works">' +
-                        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>' +
-                    '</button>' +
-                    '<button type="button" class="f2c-nav-btn f2c-nav-icon" data-view="settings" title="Settings" aria-label="Settings">' +
-                        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' +
-                    '</button>' +
-                '</div>' +
+            '<div class="f2c-progress" aria-hidden="true"></div>' +
+            '<div class="f2c-top">' +
+                '<span class="f2c-top-icon">' + svg("link") + '</span>' +
+                '<input type="text" class="f2c-input" spellcheck="false" autocomplete="off" aria-label="Figma frame link" />' +
+                '<button type="button" class="f2c-icon-btn f2c-gear" title="Settings" aria-label="Settings" aria-expanded="false" aria-controls="f2c-drawer">' + svg("gear") + '</button>' +
             '</div>' +
+            '<div class="f2c-under"></div>' +
+            '<div class="f2c-drawer" id="f2c-drawer" hidden></div>' +
             '<div class="f2c-body"></div>' +
+            '<div class="f2c-foot"></div>' +
             '<div class="f2c-live" aria-live="polite"></div>' +
         '</div>'
     ).appendTo("body");
-
     const $body = $panel.find(".f2c-body");
+    const $input = $panel.find(".f2c-input");
+    const $under = $panel.find(".f2c-under");
+    const $drawer = $panel.find(".f2c-drawer");
+    const $foot = $panel.find(".f2c-foot");
     const $live = $panel.find(".f2c-live");
     function announce(text) { $live.text(""); setTimeout(function () { $live.text(text || ""); }, 30); }
-
-    function setView(v) { ui.view = v; renderPanel(); }
-    function renderNav() {
-        $panel.find(".f2c-nav-btn").each(function () {
-            const on = $(this).attr("data-view") === ui.view;
-            $(this).toggleClass("f2c-nav-active", on);
-            if (on) { $(this).attr("aria-current", "page"); } else { $(this).removeAttr("aria-current"); }
-        });
-        $panel.find('.f2c-nav-btn[data-view="settings"]').toggleClass("f2c-nav-alert", !getToken() || !!ui.tokenBad);
-    }
-    function statusHtml() {
-        if (ui.loading || ui.busy) { return '<div class="f2c-status f2c-loading" role="status"><span class="f2c-spin"></span>' + esc(ui.info || "Working…") + '</div>'; }
-        if (ui.error)   { return '<div class="f2c-status f2c-err" role="alert">' + esc(ui.error) + '</div>'; }
-        if (ui.info)    { return '<div class="f2c-status f2c-ok" role="status">' + esc(ui.info) + '</div>'; }
-        return "";
-    }
     function flash(kind, msg) {
         ui.error = kind === "err" ? msg : "";
         ui.info  = kind === "ok"  ? msg : "";
         if (msg) { announce(msg); }
     }
-
-    // ---- Shared UI bits (icons, hero, rows) ----
-    const ICONS = {
-        link:  '<path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
-        key:   '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.5 12.5 20 3"/><path d="M16 7l3 3"/>',
-        image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="1.6"/><path d="M21 15l-5-5L5 21"/>',
-        code:  '<path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/>',
-        send:  '<path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>',
-        arrowup:'<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
-        bolt:  '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
-        folder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-        search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
-        sparkle:'<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 17l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>'
-    };
-    function svg(key) { return '<svg viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[key] || "") + '</svg>'; }
-    function heroHtml() { return '<div class="f2c-hero"></div>'; }
-    function listHtml(items) {
-        return '<ul class="f2c-list">' + items.map(function (it) {
-            return '<li><span class="f2c-chip">' + svg(it.icon) + '</span>' +
-                   '<span class="f2c-list-text">' + it.text + '</span></li>';
-        }).join("") + '</ul>';
-    }
     function aiAvailable() { return !!document.querySelector(".ai-chat-textarea"); }
+    function inputMode() { return (!getToken() || ui.tokenBad) ? "token" : "link"; }
+    function getMode() { return getLastAction(); }
 
-    // ---- Import ----
-    function visibleFrames() {
-        const q = ui.filter.trim().toLowerCase();
-        if (!q) { return ui.frames; }
-        return ui.frames.filter(function (f) { return (f.name + " " + (f.page || "")).toLowerCase().indexOf(q) >= 0; });
-    }
-    function gridHtml() {
-        const list = visibleFrames();
-        if (!list.length) { return '<div class="f2c-grid f2c-grid-empty">No frames match "' + esc(ui.filter.trim()) + '". <button type="button" class="f2c-link" data-action="clear-filter">Clear</button></div>'; }
-        let html = '<div class="f2c-grid' + (ui.busy ? " f2c-grid-locked" : "") + '" role="listbox" aria-label="Frames">';
-        list.forEach(function (f) {
-            const sel = f.id === ui.selectedId;
-            const size = (f.w && f.h) ? Math.round(f.w) + "×" + Math.round(f.h) : "";
-            html += '<button type="button" class="f2c-frame' + (sel ? " f2c-selected" : "") + '" data-id="' + esc(f.id) + '" role="option" aria-selected="' + (sel ? "true" : "false") + '"' + (ui.busy ? " disabled" : "") + '>' +
-                (f.imgUrl ? '<img src="' + esc(f.imgUrl) + '" alt="" loading="lazy" />'
-                          : '<div class="f2c-frame-ph">' + (f.imgFailed ? "No preview" : '<span class="f2c-spin"></span>') + '</div>') +
-                '<span class="f2c-frame-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span>' +
-                '<span class="f2c-frame-meta">' + esc(size) + (f.page && ui.pages > 1 ? (size ? " · " : "") + esc(f.page) : "") + '</span>' +
-            '</button>';
-        });
-        return html + '</div>';
-    }
-    function confirmHtml() {
-        const c = ui.confirm;
-        return '<div class="f2c-card f2c-card-warn" role="alertdialog" aria-label="File already exists">' +
-            '<div class="f2c-card-title">' + esc(c.rel) + ' already exists</div>' +
-            '<div class="f2c-card-text">' + (c.dirty ? "It is open with unsaved changes. Replacing it throws those away." : "Replace it, or keep both files?") + '</div>' +
-            '<div class="f2c-card-actions">' +
-                '<button type="button" class="f2c-btn-white f2c-btn-sm" data-action="keep-both">Keep both</button>' +
-                '<button type="button" class="f2c-btn-ghost f2c-btn-sm" data-action="replace">Replace</button>' +
-                '<button type="button" class="f2c-link" data-action="cancel-confirm">Cancel</button>' +
-            '</div></div>';
-    }
-    function resultHtml() {
-        const r = ui.result;
-        if (r.kind === "convert") {
-            return '<div class="f2c-card f2c-card-ok" role="status">' +
-                '<div class="f2c-card-title">✓ Wrote ' + esc(r.rel) + '</div>' +
-                '<div class="f2c-card-text">' + esc(r.detail) + '</div>' +
-                '<div class="f2c-card-actions">' +
-                    '<button type="button" class="f2c-btn-white f2c-btn-sm" data-action="open-preview">Open Live Preview</button>' +
-                    '<button type="button" class="f2c-btn-ghost f2c-btn-sm" data-action="show-tree">Show in files</button>' +
-                '</div></div>';
+    // ---- top input: attributes only, never the value (keeps caret while typing) ----
+    function renderTop() {
+        const mode = inputMode();
+        const checking = ui.tokenCheck && ui.tokenCheck.status === "checking";
+        const lock = ui.loading || !!ui.busy || !!ui.confirm || checking;
+        if (ui.inputModeShown !== mode) {
+            // Mode changed (token saved, or token died): swap the field over.
+            ui.inputModeShown = mode;
+            $input.val(mode === "link" ? (ui.urlDraft != null ? ui.urlDraft : (prefs.get("lastUrl") || "")) : (ui.tokenDraft || ""));
         }
-        return '<div class="f2c-card f2c-card-ok" role="status">' +
-            '<div class="f2c-card-title">✓ Prompt is ready in the AI panel</div>' +
-            '<div class="f2c-card-text">' + esc(r.detail) + ' Review it, then press Send.</div>' +
-            '<div class="f2c-card-actions"><button type="button" class="f2c-btn-white f2c-btn-sm" data-action="go-ai">Go to AI panel</button></div></div>';
+        $input.attr({
+            type: mode === "token" ? "password" : "text",
+            placeholder: mode === "token" ? "Paste your Figma token to begin" : "Paste a Figma frame link",
+            "aria-label": mode === "token" ? "Figma personal access token" : "Figma frame link"
+        }).prop("disabled", lock);
+        $panel.find(".f2c-top-icon").html(mode === "token" ? svg("key") : svg("link")).toggleClass("f2c-top-icon-key", mode === "token");
+        $panel.toggleClass("f2c-is-busy", !!(ui.loading || ui.busy || checking));
+        $panel.find(".f2c-gear").attr("aria-expanded", ui.drawer ? "true" : "false").toggleClass("f2c-gear-on", !!ui.drawer);
     }
-    function renderImport() {
-        let html = '<div class="f2c-pad">';
-        const urlVal = ui.urlDraft != null ? ui.urlDraft : (prefs.get("lastUrl") || "");
-        const locked = ui.loading || !!ui.busy || !!ui.confirm;
-        html += '<div class="f2c-title f2c-title-sm">Paste a Figma frame link</div>';
-        html += '<div class="f2c-sub">In Figma: right-click a frame, then <b>Copy link to selection</b>.</div>';
-        html +=
-            '<div class="f2c-composer' + (ui.urlError ? " f2c-composer-err" : "") + '">' +
-                '<input type="text" class="f2c-url" spellcheck="false" autocomplete="off" aria-label="Figma frame link"' +
-                ' placeholder="https://www.figma.com/design/…" value="' + esc(urlVal) + '"' + (locked ? " disabled" : "") + ' />' +
-                '<div class="f2c-composer-bar">' +
-                    '<span class="f2c-composer-hint">' + (urlVal.trim() ? "Press Enter to load" : "") + '</span>' +
-                    '<div class="f2c-composer-spacer"></div>' +
-                    '<button type="button" class="f2c-round-btn f2c-load-btn' + (urlVal.trim() ? " f2c-round-ready" : "") + '" title="Load frames" aria-label="Load frames"' +
-                    (locked || !urlVal.trim() ? " disabled" : "") + '>' +
-                    (ui.loading ? '<span class="f2c-spin"></span>' : svg("arrowup")) + '</button>' +
-                '</div>' +
-            '</div>';
-        if (ui.urlError) { html += '<div class="f2c-field-msg" role="alert">' + esc(ui.urlError) + '</div>'; }
-        if (getToken() && ui.tokenBad) {
-            html += '<div class="f2c-status f2c-err f2c-status-action" role="alert">' +
-                '<span>Your saved Figma token no longer works.</span>' +
-                '<button type="button" class="f2c-btn-white f2c-btn-sm" data-go="settings">Replace token</button></div>';
-        } else if (!getToken()) {
-            html += '<div class="f2c-status ' + (ui.needToken ? "f2c-err" : "f2c-loading") + ' f2c-status-action"' + (ui.needToken ? ' role="alert"' : "") + '>' +
-                '<span>' + (ui.needToken ? "Add your Figma token before loading frames." : "You need a Figma token to load frames.") + '</span>' +
-                '<button type="button" class="f2c-btn-white f2c-btn-sm" data-go="settings">Add token</button></div>';
+    // ---- line under the input: error > token message > notice > hint ----
+    function renderUnder() {
+        const mode = inputMode();
+        let cls = "", text = "", html = "";
+        if (ui.urlError) { cls = "f2c-under-err"; text = ui.urlError; }
+        else if (ui.tokenCheck && ui.tokenCheck.status === "err") { cls = "f2c-under-err"; text = ui.tokenCheck.msg; }
+        else if (ui.tokenCheck && ui.tokenCheck.status === "checking") { text = "Checking the token with Figma…"; }
+        else if (ui.tokenCheck && ui.tokenCheck.status === "ok" && mode === "link" && !ui.frames.length) { cls = "f2c-under-ok"; text = "Connected as " + ui.tokenCheck.who + ". Now paste a frame link."; }
+        else if (mode === "token") {
+            html = (ui.tokenBad ? "Your saved token stopped working. " : "") +
+                'In Figma: Settings → Security → Personal access tokens, scope <b>File content: read</b>. ' +
+                '<button type="button" class="f2c-link" data-open-url="' + TOKEN_HELP_URL + '">Show me</button>';
         }
-        if (ui.notice && !ui.loading) { html += '<div class="f2c-status f2c-note-box">' + esc(ui.notice) + '</div>'; }
-        html += statusHtml();
-        if (ui.confirm) { html += confirmHtml(); }
-        else if (ui.result) { html += resultHtml(); }
-
-        if (ui.frames.length) {
-            const shown = ui.frames.length, total = ui.frameTotal || shown;
-            const anyFailed = ui.frames.some(function (f) { return f.imgFailed; });
-            html += '<div class="f2c-filehead">' +
-                '<span class="f2c-filename" title="' + esc(ui.fileName || "") + '">' + esc(ui.fileName || "Figma file") + '</span>' +
-                '<span class="f2c-filecount">' + (total > shown ? "Showing " + shown + " of " + total : shown + (shown === 1 ? " frame" : " frames")) + '</span>' +
-                '<button type="button" class="f2c-link f2c-link-quiet" data-action="reload" title="Fetch the frames again"' + (locked ? " disabled" : "") + '>Reload</button>' +
-            '</div>';
-            if (total > shown) { html += '<div class="f2c-note f2c-note-tight">Only the first ' + MAX_FRAMES + ' are listed. Paste a link to a specific frame to reach the rest.</div>'; }
-            if (anyFailed && !ui.loading) { html += '<div class="f2c-note f2c-note-tight">Some previews didn\'t load. <button type="button" class="f2c-link" data-action="retry-thumbs">Try again</button></div>'; }
-            if (shown > 8) {
-                html += '<div class="f2c-field f2c-filter">' + svg("search") +
-                    '<input type="text" class="f2c-filter-input" placeholder="Filter frames" aria-label="Filter frames" value="' + esc(ui.filter) + '" /></div>';
-            }
-            html += gridHtml();
-            const canAi = aiAvailable();
-            const sel = !!ui.selectedId;
-            const first = getLastAction();
-            function actionBtn(kind) {
-                const ai = kind === "ai";
-                const primary = kind === first;
-                const dis = !sel || locked || (ai && !canAi);
-                const label = ui.busy === kind ? '<span class="f2c-spin' + (primary ? " f2c-spin-dark" : "") + '"></span>Working…'
-                            : (ai ? svg("sparkle") + "Build with AI" : svg("bolt") + "Quick convert");
-                return '<button type="button" class="' + (primary ? "f2c-btn-white" : "f2c-btn-ghost") + ' f2c-btn-full f2c-action-btn" data-action="' + kind + '"' +
-                    (dis ? " disabled" : "") + (ai && !canAi ? ' title="Open the AI tab in the sidebar first"' : "") + '>' + label + '</button>';
-            }
-            html += '<div class="f2c-actionbar">' +
-                (sel ? "" : '<div class="f2c-note f2c-note-center">Pick a frame to continue</div>') +
-                '<div class="f2c-actions-2">' + (first === "ai" ? actionBtn("ai") + actionBtn("convert") : actionBtn("convert") + actionBtn("ai")) + '</div>' +
-                (canAi ? '<div class="f2c-note f2c-note-center">Quick convert is instant and approximate. Build with AI takes longer and matches the design closely.</div>'
-                       : '<div class="f2c-note f2c-note-center">Build with AI needs the Phoenix AI panel. Open the AI tab in the sidebar to enable it.</div>') +
-            '</div>';
-        }
-        html += '</div>';
-        $body.html(html);
+        else if (ui.error && !ui.frames.length) { cls = "f2c-under-err"; text = ui.error; }   // with frames, the footer shows it
+        else if (ui.notice && !ui.loading) { text = ui.notice; }
+        else if (ui.loading) { text = ui.info || "Loading…"; }
+        else if (!ui.frames.length) { text = "In Figma, right-click a frame → Copy link to selection."; }
+        $under.attr("class", "f2c-under " + cls).attr("role", cls === "f2c-under-err" ? "alert" : null);
+        if (html) { $under.html(html); } else { $under.text(text); }
+        $under.toggle(!!(text || html));
     }
-
-    // ---- Guide (first run: hero + token; later: short read-only guide) ----
-    function renderGuide() {
-        const firstRun = !isOnboarded();
-        const has = !!getToken() && !ui.tokenBad;
-        const steps = [
-            { icon: "key",   text: "In <b>Figma</b>, open Settings → Security → Personal access tokens and create one with <b>File content: read</b>" },
-            { icon: "link",  text: "Right-click a frame in Figma, <b>Copy link to selection</b>, paste it in <b>Import</b>" },
-            { icon: "image", text: "Pick the frame you want" },
-            { icon: "bolt",  text: "<b>Quick convert</b> writes HTML/CSS into <b>" + esc(getOutDir()) + "/</b> in your project, icons and images included" },
-            { icon: "sparkle", text: "<b>Build with AI</b> hands the design to the Phoenix AI panel for a close, hand-written rebuild" }
-        ];
-        let html = (firstRun ? heroHtml() : "") + '<div class="f2c-pad">' +
-            '<div class="f2c-title">' + (firstRun ? "Figma frames to code" : "How it works") + '</div>' +
-            '<div class="f2c-sub">' + (firstRun ? "Two ways to turn a frame into code, both from one Figma token." : "") + '</div>' +
-            listHtml(steps);
-        if (firstRun) {
-            html += '<div class="f2c-label">Your Figma token' + (has ? "" : ' <span class="f2c-required">required</span>') + '</div>' +
-                tokenRowHtml(has ? "Saved. Paste a new one to replace it" : (getToken() ? "Paste a new token" : "figd_…"));
-            if (ui.tokenCheck) { html += tokenStatusHtml(); }
-            else if (getToken() && ui.tokenBad) { html += '<div class="f2c-status f2c-err" role="alert">Your saved token no longer works. Paste a new one above.</div>'; }
-            else if (has) { html += '<div class="f2c-status f2c-ok" role="status">✓ Token saved. You are ready to import.</div>'; }
-            if (ui.tutError && !has) { html += '<div class="f2c-field-msg" role="alert">' + esc(ui.tutError) + '</div>'; }
-            html += '<button type="button" class="f2c-btn-white f2c-btn-full f2c-tut-next f2c-mt">' + (has ? "Start importing" : "Save token and start") + '</button>';
-        } else {
-            html += '<div class="f2c-settings-footer">' +
-                '<button type="button" class="f2c-link" data-go="settings">Manage token in Settings</button>' +
-                ' · <button type="button" class="f2c-link" data-open-url="' + TOKEN_HELP_URL + '">Figma token help</button></div>';
-        }
-        html += '</div>';
-        $body.html(html);
-    }
-
-    // ---- Settings ----
-    function renderSettings() {
+    // ---- settings drawer ----
+    function renderDrawer() {
+        if (!ui.drawer) { $drawer.attr("hidden", true).empty(); return; }
         const token = getToken();
         const masked = token ? (token.slice(0, 6) + "…" + token.slice(-4)) : "";
         const scale = getScale();
         let opts = "";
         [1, 2, 3, 4].forEach(function (s) { opts += '<option value="' + s + '"' + (s === scale ? " selected" : "") + '>' + s + '×</option>'; });
-        let html = '<div class="f2c-pad">' +
-            '<div class="f2c-title f2c-title-md">Settings</div>';
-        html += '<div class="f2c-label">Figma personal access token' + (token ? "" : ' <span class="f2c-required">required</span>') + '</div>' +
-            tokenRowHtml(token ? masked + " (paste to replace)" : "figd_…");
-        if (ui.tokenCheck) { html += tokenStatusHtml(); }
-        else if (token && ui.tokenBad) {
-            html += '<div class="f2c-status f2c-err f2c-status-action" role="alert"><span>This token no longer works (expired or revoked). Paste a new one above.</span>' +
-                '<span class="f2c-status-links"><button type="button" class="f2c-link" data-clear="1">Remove</button></span></div>';
-        } else if (token) {
-            html += '<div class="f2c-status f2c-ok f2c-status-action" role="status"><span>✓ Token saved (' + esc(masked) + ')</span>' +
-                '<span class="f2c-status-links"><button type="button" class="f2c-link" data-test="1">Test</button>' +
-                '<button type="button" class="f2c-link" data-clear="1">Remove</button></span></div>';
-        }
-        html += '<div class="f2c-note">Stored only on this machine (Phoenix preferences). Never uploaded.</div>';
-        html += '<div class="f2c-label f2c-mt">Output folder</div>' +
-            '<div class="f2c-row"><div class="f2c-field">' + svg("folder") +
-                '<input type="text" class="f2c-outdir" spellcheck="false" aria-label="Output folder" value="' + esc(getOutDir()) + '" /></div></div>' +
-            '<div class="f2c-note">Inside your project. Pages go in <b>' + esc(getOutDir()) + '/</b>, icons and images in <b>' + esc(getOutDir()) + '/assets/</b>.</div>';
-        html += '<div class="f2c-label f2c-mt">Design image for Build with AI</div>' +
-            '<select class="f2c-scale" aria-label="Design image resolution">' + opts + '</select>' +
-            '<div class="f2c-note">Resolution of the design PNG saved for the AI to look at. 2× is plenty for most screens.</div>';
-        html += '<div class="f2c-settings-footer"><button type="button" class="f2c-link" data-action="replay-guide">Replay the welcome guide</button></div></div>';
-        $body.html(html);
+        const tc = ui.tokenCheck || {};
+        let tokenLine;
+        if (tc.status === "checking") { tokenLine = '<span class="f2c-dim">Checking…</span>'; }
+        else if (tc.status === "ok") { tokenLine = '<span class="f2c-okc">Connected as ' + esc(tc.who) + '</span>'; }
+        else if (token && ui.tokenBad) { tokenLine = '<span class="f2c-errc">' + esc(masked) + ' no longer works</span>'; }
+        else if (token) { tokenLine = '<span class="f2c-mono">' + esc(masked) + '</span>'; }
+        else { tokenLine = '<span class="f2c-dim">None saved</span>'; }
+        $drawer.removeAttr("hidden").html(
+            '<div class="f2c-set">' +
+                '<div class="f2c-set-k">Figma token</div>' +
+                '<div class="f2c-set-v">' + tokenLine + '</div>' +
+                '<div class="f2c-set-a">' +
+                    (token ? '<button type="button" class="f2c-link" data-action="test-token"' + (tc.status === "checking" ? " disabled" : "") + '>Test</button>' +
+                             '<button type="button" class="f2c-link" data-action="replace-token">Replace</button>' +
+                             '<button type="button" class="f2c-link" data-action="clear-token">Remove</button>' : "") +
+                '</div>' +
+            '</div>' +
+            '<div class="f2c-set">' +
+                '<div class="f2c-set-k"><label for="f2c-outdir">Output folder</label></div>' +
+                '<div class="f2c-set-v"><input id="f2c-outdir" type="text" class="f2c-outdir f2c-mini" spellcheck="false" value="' + esc(getOutDir()) + '" /><span class="f2c-dim">/ in your project</span></div>' +
+            '</div>' +
+            '<div class="f2c-set">' +
+                '<div class="f2c-set-k"><label for="f2c-scale">AI design image</label></div>' +
+                '<div class="f2c-set-v"><select id="f2c-scale" class="f2c-scale f2c-mini">' + opts + '</select><span class="f2c-dim">2× is plenty</span></div>' +
+            '</div>' +
+            '<div class="f2c-set f2c-set-note">Token is stored only in Phoenix preferences on this machine. Icons and images are copied into <b>' + esc(getOutDir()) + '/assets/</b> so pages keep working after Figma links expire.</div>'
+        );
     }
-
-    // Re-render the body, keeping keyboard focus where it was. The whole body is
-    // rebuilt as HTML, which would otherwise drop focus to <body> on every click.
+    // ---- middle: frames ----
+    function visibleFrames() {
+        const q = ui.filter.trim().toLowerCase();
+        if (!q) { return ui.frames; }
+        return ui.frames.filter(function (f) { return (f.name + " " + (f.page || "")).toLowerCase().indexOf(q) >= 0; });
+    }
+    function thumbHtml(f, cls) {
+        if (f.imgUrl) { return '<span class="' + cls + '"><img src="' + esc(f.imgUrl) + '" alt="" loading="lazy" /></span>'; }
+        return '<span class="' + cls + (f.imgFailed ? " f2c-thumb-none" : " f2c-thumb-wait") + '"></span>';
+    }
+    function sizeOf(f) { return (f.w && f.h) ? Math.round(f.w) + "×" + Math.round(f.h) : ""; }
+    function listHtml() {
+        const list = visibleFrames();
+        if (!list.length) { return '<div class="f2c-empty">Nothing matches "' + esc(ui.filter.trim()) + '". <button type="button" class="f2c-link" data-action="clear-filter">Clear</button></div>'; }
+        let html = '<div class="f2c-list" role="listbox" aria-label="Frames">';
+        list.forEach(function (f) {
+            const sel = f.id === ui.selectedId;
+            html += '<button type="button" class="f2c-row' + (sel ? " f2c-row-on" : "") + '" data-id="' + esc(f.id) + '" role="option" aria-selected="' + (sel ? "true" : "false") + '"' + (ui.busy ? " disabled" : "") + '>' +
+                thumbHtml(f, "f2c-thumb") +
+                '<span class="f2c-row-main"><span class="f2c-row-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span>' +
+                (ui.pages > 1 && f.page ? '<span class="f2c-row-sub">' + esc(f.page) + '</span>' : "") + '</span>' +
+                '<span class="f2c-row-size f2c-mono">' + esc(sizeOf(f)) + '</span>' +
+                '<span class="f2c-row-check">' + svg("check") + '</span>' +
+            '</button>';
+        });
+        return html + '</div>';
+    }
+    function renderBody() {
+        let html = "";
+        if (ui.loading && !ui.frames.length) {
+            html = '<div class="f2c-skel"><div></div><div></div><div></div></div>';
+        } else if (ui.frames.length === 1) {
+            const f = ui.frames[0];
+            html = '<div class="f2c-one">' + thumbHtml(f, "f2c-one-img") +
+                '<div class="f2c-one-meta"><span class="f2c-one-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span>' +
+                '<span class="f2c-mono f2c-dim">' + esc(sizeOf(f)) + '</span>' +
+                (f.imgFailed ? '<button type="button" class="f2c-link" data-action="retry-thumbs">Load preview</button>' : "") + '</div></div>';
+        } else if (ui.frames.length > 1) {
+            const shown = ui.frames.length, total = ui.frameTotal || shown;
+            const anyFailed = ui.frames.some(function (f) { return f.imgFailed; });
+            html = '<div class="f2c-listhead">' +
+                '<span class="f2c-listhead-name" title="' + esc(ui.fileName || "") + '">' + esc(ui.fileName || "Figma file") + '</span>' +
+                '<span class="f2c-dim f2c-nowrap">' + (total > shown ? shown + " of " + total : shown + " frames") + '</span>' +
+                (anyFailed && !ui.loading ? '<button type="button" class="f2c-link" data-action="retry-thumbs">Previews</button>' : "") +
+                '<button type="button" class="f2c-link" data-action="reload"' + (ui.loading || ui.busy ? " disabled" : "") + '>Reload</button>' +
+            '</div>';
+            if (shown > 8) {
+                html += '<div class="f2c-filterrow">' + svg("search") + '<input type="text" class="f2c-filter f2c-mini" placeholder="Filter" aria-label="Filter frames" value="' + esc(ui.filter) + '" /></div>';
+            }
+            if (total > shown) { html += '<div class="f2c-dim f2c-small f2c-pad-x">First ' + MAX_FRAMES + ' only. Link to a specific frame to reach the rest.</div>'; }
+            html += listHtml();
+        }
+        $body.html(html).toggle(!!html);
+    }
+    // ---- bottom: result / confirm / mode + one button ----
+    function renderFoot() {
+        if (!ui.frames.length && !ui.confirm && !ui.result) { $foot.empty().hide(); return; }
+        let html = "";
+        if (ui.confirm) {
+            const c = ui.confirm;
+            html = '<div class="f2c-ask" role="alertdialog" aria-label="File already exists">' +
+                '<span class="f2c-ask-text"><b>' + esc(c.rel) + '</b> exists' + (c.dirty ? " with unsaved edits" : "") + '.</span>' +
+                '<span class="f2c-ask-btns">' +
+                    '<button type="button" class="f2c-btn f2c-btn-primary f2c-btn-sm" data-action="keep-both">Keep both</button>' +
+                    '<button type="button" class="f2c-btn f2c-btn-sm" data-action="replace">Replace</button>' +
+                    '<button type="button" class="f2c-link" data-action="cancel-confirm">Cancel</button>' +
+                '</span></div>';
+            $foot.html(html).show(); return;
+        }
+        if (ui.result) {
+            const r = ui.result;
+            html += '<div class="f2c-done" role="status">' + svg("check") +
+                (r.kind === "convert"
+                    ? '<span class="f2c-done-text" title="' + esc(r.detail) + '">Wrote <b>' + esc(r.rel) + '</b></span>' +
+                      '<button type="button" class="f2c-link" data-action="open-preview">Preview</button>' +
+                      '<button type="button" class="f2c-link" data-action="show-tree">Files</button>'
+                    : '<span class="f2c-done-text">Prompt ready in the AI panel. Review it, then send.</span>' +
+                      '<button type="button" class="f2c-link" data-action="go-ai">Go to AI</button>') +
+            '</div>';
+        } else if (ui.error && ui.frames.length) {
+            html += '<div class="f2c-done f2c-done-err" role="alert">' + esc(ui.error) + '</div>';
+        }
+        if (ui.frames.length) {
+            const mode = getMode(), ai = mode === "ai", canAi = aiAvailable();
+            const sel = !!ui.selectedId;
+            const lock = ui.loading || !!ui.busy;
+            const dis = !sel || lock || (ai && !canAi);
+            html += '<div class="f2c-bar">' +
+                '<div class="f2c-seg" role="radiogroup" aria-label="Output">' +
+                    '<button type="button" class="f2c-seg-btn' + (!ai ? " f2c-seg-on" : "") + '" role="radio" aria-checked="' + (!ai) + '" data-mode="convert" title="Instant local HTML/CSS, approximate"' + (lock ? " disabled" : "") + '>Local</button>' +
+                    '<button type="button" class="f2c-seg-btn' + (ai ? " f2c-seg-on" : "") + '" role="radio" aria-checked="' + ai + '" data-mode="ai" title="' + (canAi ? "Phoenix AI rebuilds it closely (slower)" : "Open the AI tab in the sidebar first") + '"' + (lock ? " disabled" : "") + '>AI</button>' +
+                '</div>' +
+                '<span class="f2c-bar-status">' + (ui.busy ? esc(ui.info || "Working…") : (!sel ? "Pick a frame" : (ai && !canAi ? "Open the AI tab first" : ""))) + '</span>' +
+                '<button type="button" class="f2c-btn f2c-btn-primary f2c-go" data-action="' + mode + '"' + (dis ? " disabled" : "") + ' title="' + (ai ? "Send to the AI panel" : "Write HTML/CSS into " + esc(getOutDir()) + "/") + ' (⌘⏎)">' +
+                    (ui.busy ? '<span class="f2c-spin"></span>' : (ai ? "Send to AI" : "Convert")) + '</button>' +
+            '</div>';
+        }
+        $foot.html(html).show();
+    }
+    // Re-render everything but the input's text, keeping keyboard focus in place.
     function renderPanel() {
         const act = document.activeElement;
         let restore = null;
-        if (act && $body[0].contains(act)) {
+        if (act && act !== $input[0] && $panel[0].contains(act)) {
             const $a = $(act);
-            const id = $a.attr("data-id"), action = $a.attr("data-action"), view = $a.attr("data-view");
-            const cls = (act.className || "").split(/\s+/).filter(function (c) { return c && c.indexOf("f2c-") === 0 && !/active|selected|ready|err/.test(c); })[0];
-            restore = {
-                sel: id ? '[data-id="' + id.replace(/"/g, '\\"') + '"]' : action ? '[data-action="' + action + '"]' : view ? '[data-view="' + view + '"]' : cls ? "." + cls : null,
-                start: act.selectionStart, end: act.selectionEnd, isInput: /^(INPUT|TEXTAREA)$/.test(act.tagName)
-            };
+            const id = $a.attr("data-id"), action = $a.attr("data-action"), mode = $a.attr("data-mode");
+            const cls = (act.className || "").split(/\s+/).filter(function (c) { return c && c.indexOf("f2c-") === 0 && !/-on$|-err$/.test(c); })[0];
+            restore = { sel: id ? '[data-id="' + id.replace(/"/g, '\\"') + '"]' : action ? '[data-action="' + action + '"]' : mode ? '[data-mode="' + mode + '"]' : cls ? "." + cls : null,
+                        start: act.selectionStart, end: act.selectionEnd, isInput: /^(INPUT|TEXTAREA|SELECT)$/.test(act.tagName) };
         }
-        renderNav();
-        if (ui.view === "guide")         { renderGuide(); }
-        else if (ui.view === "settings") { renderSettings(); }
-        else                             { renderImport(); }
+        renderTop(); renderUnder(); renderDrawer(); renderBody(); renderFoot();
         if (restore && restore.sel) {
-            const el = $body.find(restore.sel).filter(":not([disabled])").get(0);
-            if (el) {
-                try {
-                    el.focus();
-                    if (restore.isInput && typeof restore.start === "number") { el.setSelectionRange(restore.start, restore.end); }
-                } catch (e) { /* ignore */ }
-            }
+            const el = $panel.find(restore.sel).filter(":not([disabled])").get(0);
+            if (el) { try { el.focus(); if (restore.isInput && typeof restore.start === "number") { el.setSelectionRange(restore.start, restore.end); } } catch (e) { /* ignore */ } }
         }
         if ($panel.is(":visible")) { positionPanel(); }
     }
+    function focusInput() { setTimeout(function () { $input.trigger("focus"); }, 0); }
+    function focusTokenField() { focusInput(); }
+    function focusUrl() { focusInput(); }
+    function focusFirstFrame() { setTimeout(function () { if (!$panel.find(":focus").length) { const $f = $body.find(".f2c-row-on, .f2c-row").first(); if ($f.length) { $f.trigger("focus"); } } }, 0); }
 
     // ============================================================
     //  Actions
@@ -1142,9 +1074,8 @@ define(function (require, exports, module) {
         ui.error = ""; ui.info = "";
         const problem = checkUrlInput(url);
         ui.urlError = problem;
-        if (problem) { ui.needToken = false; renderPanel(); focusUrl(); return; }
-        if (!getToken()) { ui.needToken = true; renderPanel(); return; }
-        ui.needToken = false;
+        if (problem) { renderPanel(); focusUrl(); return; }
+        if (!getToken()) { renderPanel(); focusInput(); return; }
         // Same link again (Enter in the box, re-paste) keeps the loaded frames and
         // the selection instead of wiping them. "Reload" passes force.
         if (!force && url === ui.loadedUrl && ui.frames.length) { renderPanel(); return; }
@@ -1237,8 +1168,6 @@ define(function (require, exports, module) {
             return msg;
         }
     }
-    function focusUrl() { setTimeout(function () { $body.find(".f2c-url").trigger("focus"); }, 0); }
-    function focusFirstFrame() { setTimeout(function () { const $f = $body.find(".f2c-frame.f2c-selected, .f2c-frame").first(); if ($f.length && !$body.find(":focus").length) { $f.trigger("focus"); } }, 0); }
     function testSavedToken() {
         if (!getToken() || (ui.tokenCheck && ui.tokenCheck.status === "checking")) { return; }
         ui.tokenCheck = { status: "checking" }; renderPanel();
@@ -1344,13 +1273,13 @@ define(function (require, exports, module) {
     // ---- Jobs: one at a time; the target frame is fixed when the job starts ----
     function beginJob(kind, msg) {
         if (ui.busy || ui.loading || ui.confirm || !ui.selectedId || !ui.fileKey) { return null; }
-        if (!getToken()) { ui.needToken = true; ui.view = "import"; renderPanel(); return null; }
+        if (!getToken()) { renderPanel(); focusInput(); return null; }
         if (!projectRootPath()) { flash("err", "Open a project folder first (File → Open Folder)."); renderPanel(); return null; }
         ui.busy = kind; ui.error = ""; ui.info = msg; ui.needToken = false; ui.result = null; renderPanel();
         const frame = ui.frames.filter(function (f) { return f.id === ui.selectedId; })[0];
         return { key: ui.fileKey, id: ui.selectedId, name: frame ? frame.name : "", root: projectRootPath() };
     }
-    function step(msg) { ui.info = msg; announce(msg); renderPanel(); }
+    function step(msg) { ui.info = msg; announce(msg); renderFoot(); renderUnder(); }
     function endJob(kind, msg) { ui.busy = ""; flash(kind, msg); renderPanel(); }
 
     // Fetch the frame + export icons/images and copy them into the project.
@@ -1438,7 +1367,7 @@ define(function (require, exports, module) {
                 ui.busy = ""; ui.info = "";
                 ui.confirm = { path: path, rel: g.outDir + "/" + g.slug + ".html", dir: dir, slug: g.slug, html: html, detail: detail, dirty: dirty };
                 renderPanel();
-                setTimeout(function () { $body.find('[data-action="keep-both"]').trigger("focus"); }, 0);
+                setTimeout(function () { $foot.find('[data-action="keep-both"]').trigger("focus"); }, 0);
                 return;
             }
             await finishConvert(path, html, detail);
@@ -1490,17 +1419,8 @@ define(function (require, exports, module) {
         }
     }
 
-    // ---- Event delegation ----
-    $panel.on("click", ".f2c-nav-btn", function () {
-        leaveView();
-        setView($(this).attr("data-view"));
-    });
-    // Switching views drops stale token messages / drafts from the previous view.
-    function leaveView() {
-        if (!(ui.tokenCheck && ui.tokenCheck.status === "checking")) { ui.tokenCheck = null; ui.tokenDraft = ""; }
-        ui.tutError = "";
-    }
-    function finishGuide() { setOnboarded(true); ui.tutError = ""; ui.tokenCheck = null; setView("import"); focusUrl(); }
+    // ---- Events ----
+    let loadTimer = null;
     function openExternal(url) {
         try {
             const NativeApp = brackets.getModule("utils/NativeApp");
@@ -1513,98 +1433,94 @@ define(function (require, exports, module) {
             if (!$("#panel-live-preview-frame").is(":visible")) { try { CommandManager.execute(Commands.FILE_LIVE_FILE_PREVIEW); } catch (e) { /* ignore */ } }
         });
     }
+    function runPrimary() {
+        if (getMode() === "ai") { buildWithAi(); } else { quickConvert(); }
+    }
+    // The top input: a token until one is saved, then a link. Paste = load.
+    function submitInput(fromEnter) {
+        const v = String($input.val() || "").trim();
+        if (inputMode() === "token") {
+            ui.tokenDraft = v;
+            if (/figma\.com\//i.test(v)) { ui.tokenCheck = { status: "err", msg: "That's a Figma link. Paste your token first; the link comes next.", field: true }; renderPanel(); return; }
+            saveTokenAndValidate(v, function () { ui.tokenDraft = ""; ui.urlDraft = ""; renderPanel(); focusInput(); });
+            return;
+        }
+        // A token pasted into the link box: save it instead of complaining.
+        if (/^figd_[A-Za-z0-9_-]{20,}$/.test(v)) { ui.tokenDraft = v; saveTokenAndValidate(v, function () { $input.val(""); ui.urlDraft = ""; renderPanel(); focusInput(); }); return; }
+        if (!v && !fromEnter) { ui.urlDraft = ""; ui.urlError = ""; renderUnder(); return; }
+        loadUrl(v);
+    }
+    $input.on("input", function () {
+        const v = String($(this).val() || "");
+        clearTimeout(loadTimer);
+        if (inputMode() === "token") {
+            ui.tokenDraft = v;
+            if (ui.tokenCheck && ui.tokenCheck.status === "err") { ui.tokenCheck = null; renderUnder(); }
+            // Tokens are pasted, not typed: a plausible one checks itself.
+            if (/^figd_[A-Za-z0-9_-]{20,}$/.test(v.trim())) { loadTimer = setTimeout(function () { submitInput(false); }, 120); }
+            return;
+        }
+        ui.urlDraft = v;
+        if (ui.urlError || ui.error) { ui.urlError = ""; ui.error = ""; renderUnder(); }
+        if (ui.result) { ui.result = null; renderFoot(); }
+        const t = v.trim();
+        if (!t) { if (ui.frames.length) { ui.frames = []; ui.selectedId = null; ui.loadedUrl = ""; ui.notice = ""; ui.loadSeq++; ui.loading = false; renderPanel(); } return; }
+        if (checkUrlInput(t) === "" || /^figd_/.test(t)) { loadTimer = setTimeout(function () { submitInput(false); }, 160); }
+    });
+    $input.on("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); clearTimeout(loadTimer); submitInput(true); }
+    });
+    $input.on("paste", function () { setTimeout(function () { $input.trigger("input"); }, 0); });
 
-    $body.on("click", function (e) {
+    $panel.on("click", ".f2c-gear", function () { ui.drawer = !ui.drawer; renderPanel(); if (ui.drawer) { setTimeout(function () { $drawer.find("button, input, select").first().trigger("focus"); }, 0); } });
+
+    $panel.on("click", function (e) {
         const $t = $(e.target);
         if ($t.closest("button[disabled]").length) { return; }
-
-        const go = $t.closest("[data-go]").attr("data-go");
-        if (go) { leaveView(); setView(go); if (go === "settings") { focusTokenField(); } return; }
         const openUrl = $t.closest("[data-open-url]").attr("data-open-url");
         if (openUrl) { openExternal(openUrl); return; }
-
+        const mode = $t.closest("[data-mode]").attr("data-mode");
+        if (mode) { setLastAction(mode); renderFoot(); return; }
         const action = $t.closest("[data-action]").attr("data-action");
         if (action) {
             if (action === "convert") { quickConvert(); }
             else if (action === "ai") { buildWithAi(); }
             else if (action === "replace" || action === "keep-both" || action === "cancel-confirm") { resolveConfirm(action === "cancel-confirm" ? "cancel" : action); }
             else if (action === "open-preview" && ui.result) { openLivePreview(ui.result.path); }
-            else if (action === "show-tree" && ui.result) { try { ProjectManager.showInTree(FileSystem.getFileForPath(ui.result.path)); } catch (e) { /* ignore */ } }
+            else if (action === "show-tree" && ui.result) { try { ProjectManager.showInTree(FileSystem.getFileForPath(ui.result.path)); } catch (err) { /* ignore */ } }
             else if (action === "go-ai") { showAiPanel(); }
-            else if (action === "reload") { loadUrl(ui.loadedUrl || $body.find(".f2c-url").val(), true); }
+            else if (action === "reload") { loadUrl(ui.loadedUrl || $input.val(), true); }
             else if (action === "retry-thumbs") { if (!ui.loading && ui.frames.length) { ui.frames.forEach(function (f) { f.imgFailed = false; }); renderPanel(); loadThumbs(ui.loadSeq); } }
-            else if (action === "clear-filter") { ui.filter = ""; renderPanel(); $body.find(".f2c-filter-input").trigger("focus"); }
-            else if (action === "replay-guide") { setOnboarded(false); leaveView(); setView("guide"); }
+            else if (action === "clear-filter") { ui.filter = ""; renderBody(); $body.find(".f2c-filter").trigger("focus"); }
+            else if (action === "test-token") { testSavedToken(); }
+            else if (action === "replace-token") { ui.tokenBad = true; ui.tokenCheck = null; ui.drawer = false; ui.tokenDraft = ""; renderPanel(); focusInput(); }
+            else if (action === "clear-token") { setToken(""); ui.tokenCheck = null; ui.tokenDraft = ""; ui.tokenBad = false; ui.frames = []; ui.selectedId = null; ui.result = null; ui.drawer = false; renderPanel(); focusInput(); }
             return;
         }
-
-        if ($t.closest(".f2c-load-btn").length) { loadUrl($body.find(".f2c-url").val()); return; }
-        const $frame = $t.closest(".f2c-frame");
-        if ($frame.length) {
+        const $row = $t.closest(".f2c-row");
+        if ($row.length) {
             if (ui.busy) { return; }
-            ui.selectedId = $frame.attr("data-id"); if (!ui.loading) { ui.error = ""; ui.info = ""; }
+            ui.selectedId = $row.attr("data-id"); ui.error = ""; ui.result = null;
             renderPanel(); return;
         }
-        if ($t.closest(".f2c-save-token").length) { saveTokenAndValidate($body.find(".f2c-token-input").val()); return; }
-        if ($t.closest(".f2c-tut-next").length) {
-            if (getToken() && !ui.tokenBad) { finishGuide(); return; }
-            const typed = String($body.find(".f2c-token-input").val() || "").trim();
-            if (typed) { ui.tutError = ""; saveTokenAndValidate(typed, finishGuide); return; }
-            ui.tutError = "Save your Figma token to continue. Every import needs it.";
-            ui.tokenCheck = null;
-            renderPanel(); focusTokenField();
-            return;
-        }
-        if ($t.closest("[data-clear]").length) {
-            setToken(""); ui.tokenCheck = null; ui.tokenDraft = ""; ui.tokenBad = false; ui.frames = []; ui.selectedId = null; ui.result = null;
-            renderPanel(); focusTokenField(); return;
-        }
-        if ($t.closest("[data-test]").length) { testSavedToken(); return; }
     });
-
-    $body.on("keydown", ".f2c-url", function (e) { if (e.key === "Enter") { e.preventDefault(); loadUrl($(this).val()); } });
-    $body.on("keydown", ".f2c-token-input", function (e) {
-        if (e.key !== "Enter") { return; }
-        e.preventDefault();
-        if (ui.view === "guide" && !(getToken() && !ui.tokenBad)) { saveTokenAndValidate($(this).val(), finishGuide); }
-        else { saveTokenAndValidate($(this).val()); }
-    });
-    // Arrow keys move between frames; Enter/Space select (native button).
-    $body.on("keydown", ".f2c-frame", function (e) {
-        const keys = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 2, ArrowUp: -2 };
+    $panel.on("keydown", ".f2c-row", function (e) {
+        const keys = { ArrowDown: 1, ArrowUp: -1 };
         if (!(e.key in keys)) { return; }
         e.preventDefault();
-        const $all = $body.find(".f2c-frame"), i = $all.index(this), j = i + keys[e.key];
+        const $all = $body.find(".f2c-row"), j = $all.index(this) + keys[e.key];
         if (j >= 0 && j < $all.length) { $all.eq(j).trigger("focus"); }
     });
-    $body.on("input", ".f2c-url", function () {
-        const v = String($(this).val() || "");
-        ui.urlDraft = v;
-        const has = !!v.trim();
-        $body.find(".f2c-load-btn").prop("disabled", !has || ui.loading || !!ui.busy).toggleClass("f2c-round-ready", has);
-        $body.find(".f2c-composer-hint").text(has ? "Press Enter to load" : "");
-        if (ui.urlError || ui.needToken) {
-            ui.urlError = ""; ui.needToken = false;
-            $body.find(".f2c-composer").removeClass("f2c-composer-err");
-            $body.find(".f2c-field-msg").remove();
-            $body.find(".f2c-status-action").removeClass("f2c-err").addClass("f2c-loading").removeAttr("role")
-                .find("span").first().text("You need a Figma token to load frames.");
+    // Cmd/Ctrl+Enter anywhere in the panel runs the primary action.
+    $panel.on("keydown", function (e) {
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            const $go = $foot.find(".f2c-go");
+            if ($go.length && !$go.prop("disabled")) { e.preventDefault(); runPrimary(); }
         }
     });
-    $body.on("input", ".f2c-token-input", function () {
-        ui.tokenDraft = String($(this).val() || "");
-        if (ui.tokenCheck && ui.tokenCheck.status === "err") {
-            ui.tokenCheck = null;
-            $(this).closest(".f2c-field").removeClass("f2c-field-err");
-            $body.find(".f2c-status.f2c-err").remove();
-        }
-    });
-    $body.on("input", ".f2c-filter-input", function () {
-        ui.filter = String($(this).val() || "");
-        $body.find(".f2c-grid").replaceWith(gridHtml());
-    });
-    $body.on("change", ".f2c-scale", function () { setScale($(this).val()); });
-    $body.on("change blur", ".f2c-outdir", function () {
+    $panel.on("input", ".f2c-filter", function () { ui.filter = String($(this).val() || ""); const $l = $body.find(".f2c-list, .f2c-empty"); if ($l.length) { $l.replaceWith(listHtml()); } });
+    $panel.on("change", ".f2c-scale", function () { setScale($(this).val()); });
+    $panel.on("change blur", ".f2c-outdir", function () {
         const v = String($(this).val() || "").trim().replace(/^\/+|\/+$/g, "").replace(/\.\.+/g, "");
         setOutDir(v); if (!v) { $(this).val(getOutDir()); }
     });
@@ -1641,13 +1557,11 @@ define(function (require, exports, module) {
     function openPanel() {
         applyTheme();
         if (!$panel[0] || !document.body.contains($panel[0])) { $panel.appendTo("body"); }
-        if (!isOnboarded()) { ui.view = "guide"; }
         $panel.css("width", PANEL_WIDTH + "px").show();
         $toolbarBtn.attr("aria-expanded", "true");
         renderPanel();          // render first, THEN measure and position
         positionPanel();
-        const $first = $body.find("input:not([disabled]), button:not([disabled])").first();
-        if ($first.length) { $first.trigger("focus"); }
+        if (ui.frames.length && ui.selectedId) { focusFirstFrame(); } else { focusInput(); }
     }
     function closePanel() {
         if (!$panel.is(":visible")) { return; }
