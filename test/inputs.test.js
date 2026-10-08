@@ -4,7 +4,7 @@
  * and figmaGet's explicit-token override used to check a token BEFORE saving it.
  * Run: `node test/inputs.test.js` */
 "use strict";
-const { inputs: I, parseFigmaUrl, makeFigmaGet } = require("./harness.js");
+const { inputs: I, parseFigmaUrl, makeFigmaGet, genApi: G } = require("./harness.js");
 
 let passed = 0, failed = 0;
 function ok(name, cond, detail) { if (cond) { passed++; console.log("  PASS  " + name); } else { failed++; console.log("  FAIL  " + name + (detail ? "  -- " + detail : "")); } }
@@ -31,6 +31,44 @@ ok("token: too short", /too short/.test(I.checkTokenInput("figd_abc")));
 ok("token: plausible figd_ token -> ok", I.checkTokenInput("figd_" + "a".repeat(40)) === "");
 ok("token: legacy (no figd_) long token -> ok", I.checkTokenInput("12345-" + "b".repeat(36)) === "");
 ok("token: surrounding whitespace trimmed -> ok", I.checkTokenInput("  figd_" + "c".repeat(40) + "\n") === "");
+
+/* ---------- other Figma products: say what they are ---------- */
+ok("url: FigJam board -> clear message", /FigJam boards can't be converted/.test(I.checkUrlInput("https://www.figma.com/board/AbC123/Retro")));
+ok("url: Slides -> clear message", /Figma Slides can't be converted/.test(I.checkUrlInput("https://www.figma.com/slides/AbC123/Deck")));
+ok("url: Sites -> clear message", /Figma Sites can't be converted/.test(I.checkUrlInput("https://www.figma.com/site/AbC123/x")));
+ok("url: Make -> clear message", /Figma Make files can't be converted/.test(I.checkUrlInput("https://www.figma.com/make/AbC123/x")));
+ok("url: community -> duplicate hint", /Community page/.test(I.checkUrlInput("https://www.figma.com/community/file/123/x")));
+ok("url: proto link -> ok", I.checkUrlInput("https://www.figma.com/proto/AbC123/x?node-id=1-2") === "");
+
+/* ---------- file names: unicode kept, collisions avoided ---------- */
+ok("slug: japanese name kept", G.safeName("ホーム") === "ホーム", G.safeName("ホーム"));
+ok("slug: cyrillic name kept", G.safeName("Главная страница") === "главная-страница", G.safeName("Главная страница"));
+ok("slug: two non-latin names differ", G.safeName("ホーム") !== G.safeName("設定"));
+ok("slug: punctuation collapsed", G.safeName("Pricing / Desktop (v2)!") === "pricing-desktop-v2", G.safeName("Pricing / Desktop (v2)!"));
+ok("slug: empty -> figma", G.safeName("") === "figma" && G.safeName(null) === "figma" && G.safeName("***") === "figma");
+ok("slug: long name trimmed without trailing dash", (function () { const r = G.safeName("a".repeat(47) + " b"); return r.length <= 48 && !/-$/.test(r); })());
+
+/* ---------- frames inside sections / groups + total ---------- */
+(function () {
+    const fr = function (id, name, w, h) { return { id: id, name: name, type: "FRAME", absoluteBoundingBox: { width: w, height: h } }; };
+    const doc = { children: [
+        { name: "Page 1", type: "CANVAS", children: [
+            fr("1:1", "Home", 1440, 900),
+            { type: "SECTION", name: "Checkout", children: [ fr("1:2", "Cart", 390, 844), { type: "GROUP", children: [ fr("1:3", "Pay", 390, 844) ] } ] },
+            { type: "TEXT", name: "stray text" },
+            { type: "FRAME", name: "hidden", visible: false, id: "1:9" }
+        ] },
+        { name: "Page 2", type: "CANVAS", children: [ fr("2:1", "Settings", 1440, 900) ] }
+    ] };
+    const out = G.collectFrames(doc);
+    ok("sections: frames inside SECTION and GROUP found", out.map(function (f) { return f.id; }).join(",") === "1:1,1:2,1:3,2:1", out.map(function (f) { return f.id; }).join(","));
+    ok("sections: page name recorded", out[1].page === "Page 1" && out[3].page === "Page 2");
+    ok("sections: hidden frame skipped", !out.some(function (f) { return f.id === "1:9"; }));
+    ok("sections: total equals shown when under cap", out.total === 4);
+    const big = { children: [ { name: "P", children: Array.from({ length: 55 }, function (_, i) { return fr("9:" + i, "F" + i, 10, 10); }) } ] };
+    const capped = G.collectFrames(big);
+    ok("cap: shows MAX_FRAMES but reports total", capped.length === 40 && capped.total === 55, capped.length + "/" + capped.total);
+})();
 
 /* ---------- branch links ---------- */
 const br = parseFigmaUrl("https://www.figma.com/design/MAINKEY1/branch/BRANCHKEY2/My-File?node-id=3-4");

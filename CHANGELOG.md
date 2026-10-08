@@ -2,7 +2,56 @@
 
 All notable changes to FigmaToCode. Versions map to phcode store releases.
 
-## [Unreleased]
+## [Unreleased] - 1.0.7 UX pass
+### Changed
+- **One flow, two actions.** The "Free seat / Paid seat" question is gone (both
+  paths always used the same personal token). Import now offers **Quick convert**
+  (local, instant, approximate) and **Build with AI** (Phoenix AI panel, slower,
+  close match) side by side; the last one used becomes the primary button.
+- **Build with AI fills the chat box but does not press Send.** You review the
+  prompt first. The panel stays open with a "Go to AI panel" card. It no longer
+  claims "Sent" when nothing was sent.
+- **Icons and images are downloaded into the project** (`figma/assets/<frame>/`)
+  for both actions, so generated pages keep working after Figma's export URLs
+  expire (about 7 days). Downloads that fail fall back to the URL and are counted
+  in the result message. Build with AI also saves a `design.png` for the AI to read.
+- **Output goes to a folder** (`figma/` by default, changeable in Settings)
+  instead of the project root.
+- Settings "Preview resolution" became "Design image for Build with AI" and now
+  actually controls that render. Thumbnails always load at 1x (faster, fewer
+  failures).
+### Fixed
+- Empty or invalid token/link input was accepted silently; now refused inline
+  with a message. The token is checked with Figma BEFORE it is saved. The
+  welcome guide cannot finish without a working token.
+- A saved token that Figma has revoked no longer shows as "saved, ready"; the
+  panel says so and offers "Replace token". A token that works but cannot open a
+  file gets its own message.
+- Existing output files were overwritten silently (even with unsaved edits open);
+  now asks Replace / Keep both / Cancel.
+- Non-Latin frame names all became `figma-figma.html`; file names now keep any
+  script and avoid collisions (`home-2.html`).
+- Frames inside Sections/Groups were missing from whole-file loads; page,
+  section and single-layer links were treated as one "frame"; FigJam/Slides/
+  Sites/Make links gave a misleading error. All handled with clear messages.
+- Files with more than 40 frames said nothing about the cut; now "Showing 40 of
+  N", with a filter box, frame sizes and page names on tiles.
+- Double clicks fired jobs twice; a stale load could overwrite a newer one; the
+  job target could change mid-run when another frame was clicked.
+- Clicking outside the panel closed it while a job was running (result lost).
+  The panel now stays while busy or waiting for an answer.
+- Light editor theme was detected but never styled; the panel is now readable
+  in light themes.
+- Keyboard: focus survives re-renders, opens into the panel and returns to the
+  toolbar button on close, Escape only acts when the panel has focus, arrow keys
+  move between frames, status changes are announced to screen readers.
+- Clipboard fallback reported "copied" even when copying failed.
+- Branch links loaded the main file instead of the branch.
+### Added (tests)
+- `test/inputs.test.js`: link/token input checks, link kinds, Unicode slugs,
+  sections/cap in `collectFrames`, token override in `figmaGet` (38 checks).
+
+## [1.0.6 - unreleased notes]
 ### Fixed
 - **Icons and logos no longer fragment or go missing (token path).** The generator
   exported every individual vector path as its own image, so multi-path icons
