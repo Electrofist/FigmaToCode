@@ -310,8 +310,7 @@ changes to know about:
   submits at all.
 
 ## 10. Current state + pending (read carefully)
-- **`ux-hardening`** = CURRENT work branch (1.0.7 UX pass, see 9b). Not pushed.
-- **`main`** = published **v1.0.6** in the store.
+- **`main`** = published **v1.0.7** (tag `V.09`, 2026-10-21): the UX pass (9b) plus the five kept items from the rejected redesign (9a). `ux-hardening` was merged via PR #9.
 - (older) **`main`** = published **v1.0.4** (tag `V.06`), live in the store. Adds the
   token-based paid path, security hardening, UI fixes, and the test suite (§4).
 - **`design-tokens`** = CURRENT work branch off `main`. Adds design tokens

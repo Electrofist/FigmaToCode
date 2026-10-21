@@ -2,7 +2,7 @@
 
 All notable changes to FigmaToCode. Versions map to phcode store releases.
 
-## [Unreleased] - 1.0.7 UX pass
+## [1.0.7] - 2026-10-21 (V.09)
 ### Changed
 - **Paste = load.** A valid link loads on its own; Enter and the arrow still
   work. A token pasted into the link box is saved instead of rejected. A thin
@@ -55,7 +55,7 @@ All notable changes to FigmaToCode. Versions map to phcode store releases.
 - `test/inputs.test.js`: link/token input checks, link kinds, Unicode slugs,
   sections/cap in `collectFrames`, token override in `figmaGet` (38 checks).
 
-## [1.0.6 - unreleased notes]
+## [1.0.6] (V.08)
 ### Fixed
 - **Icons and logos no longer fragment or go missing (token path).** The generator
   exported every individual vector path as its own image, so multi-path icons
